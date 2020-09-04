@@ -16,3 +16,6 @@
 [submodule "android/wolfcryptjni-ndk-gradle/wolfcrypt-jni"]
 	path = android/wolfcryptjni-ndk-gradle/wolfcrypt-jni
 	url = https://github.com/wolfssl/wolfcrypt-jni
+[submodule "Xilinx/FreeRTOS/wolfssl/wolfssl"]
+	path = Xilinx/FreeRTOS/wolfssl/wolfssl
+	url = https://github.com/wolfssl/wolfssl.git

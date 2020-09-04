@@ -66,7 +66,7 @@
 						</toolChain>
 					</folderInfo>
 					<sourceEntries>
-						<entry excluding="src/bio.c|wolfcrypt/src/evp.c|wolfcrypt/src/misc.c|IDE/LPCXPRESSO/wolf_example|tirtos|testsuite|tests|swig|support|sslSniffer|scripts|rpm|mqx|mplabx|mcapi|m4|IDE/WORKBENCH|IDE/WIN|IDE/ROWLEY-CROSSWORKS-ARM|IDE/MYSQL|IDE/MDK-ARM|IDE/MDK5-ARM|IDE/LPCXPRESSO/wolf_demo|IDE/LPCXPRESSO/lpc_chip_18xx|IDE/LPCXPRESSO/lpc_board_nxp_lpcxpresso_1837|IDE/iOS|IDE/IAR-EWARM|examples|Debug|certs|build-aux|Backup|autom4te.cache|wolfcrypt/src/aes_asm.s|wolfcrypt/src/aes_asm.asm|wolfcrypt/user-crypto" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name=""/>
+						<entry excluding="wolfssl/src/bio.c|wolfssl/wolfcrypt/src/evp.c|wolfssl/wolfcrypt/src/misc.c|wolfssl/IDE/LPCXPRESSO/wolf_example|wolfssl/tirtos|wolfssl/testsuite|wolfssl/tests|wolfssl/swig|wolfssl/support|wolfssl/sslSniffer|wolfssl/scripts|wolfssl/rpm|wolfssl/mqx|wolfssl/mplabx|wolfssl/mcapi|wolfssl/m4|wolfssl/IDE/WORKBENCH|wolfssl/IDE/WIN|wolfssl/IDE/ROWLEY-CROSSWORKS-ARM|wolfssl/IDE/MYSQL|wolfssl/IDE/MDK-ARM|wolfssl/IDE/MDK5-ARM|wolfssl/IDE/LPCXPRESSO/wolf_demo|wolfssl/IDE/LPCXPRESSO/lpc_chip_18xx|wolfssl/IDE/LPCXPRESSO/lpc_board_nxp_lpcxpresso_1837|wolfssl/IDE/iOS|wolfssl/IDE/IAR-EWARM|wolfssl/examples|wolfssl/certs|wolfssl/build-aux|wolfssl/autom4te.cache|wolfssl/wolfcrypt/src/aes_asm.s|wolfssl/wolfcrypt/src/aes_asm.asm|wolfssl/wolfssl/wolfcrypt/user-crypto" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name=""/>
 					</sourceEntries>
 				</configuration>
 			</storageModule>
@@ -92,7 +92,7 @@
 				<externalSettings>
 					<externalSetting>
 						<entry flags="VALUE_WORKSPACE_PATH" kind="includePath" name="/lib_wolfssl"/>
-						<entry flags="VALUE_WORKSPACE_PATH" kind="includePath" name="/wolfssl"/>
+						<entry flags="VALUE_WORKSPACE_PATH" kind="includePath" name="/wolfssl/wolfssl"/>
 						<entry flags="VALUE_WORKSPACE_PATH" kind="libraryPath" name="/lib_wolfssl/Release"/>
 						<entry flags="VALUE_WORKSPACE_PATH" kind="libraryPath" name="/wolfssl/Release"/>
 						<entry flags="RESOLVED" kind="libraryFile" name="lib_wolfssl" srcPrefixMapping="" srcRootPath=""/>
@@ -152,7 +152,7 @@
 						</toolChain>
 					</folderInfo>
 					<sourceEntries>
-						<entry excluding="IDE/LPCXPRESSO/wolf_example|tirtos|testsuite|tests|swig|support|sslSniffer|scripts|rpm|mqx|mplabx|mcapi|m4|IDE/WORKBENCH|IDE/WIN|IDE/ROWLEY-CROSSWORKS-ARM|IDE/MYSQL|IDE/MDK-ARM|IDE/MDK5-ARM|IDE/LPCXPRESSO/wolf_demo|IDE/LPCXPRESSO/lpc_board_nxp_lpcxpresso_1837|IDE/iOS|IDE/IAR-EWARM|examples|Debug|certs|build-aux|Backup|autom4te.cache|wolfcrypt/src/aes_asm.s|wolfcrypt/src/aes_asm.asm|wolfcrypt/user-crypto" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name=""/>
+						<entry excluding="wolfssl/src/bio.c|wolfssl/wolfcrypt/src/evp.c|wolfssl/wolfcrypt/src/misc.c|wolfssl/IDE/LPCXPRESSO/wolf_example|wolfssl/tirtos|wolfssl/testsuite|wolfssl/tests|wolfssl/swig|wolfssl/support|wolfssl/sslSniffer|wolfssl/scripts|wolfssl/rpm|wolfssl/mqx|wolfssl/mplabx|wolfssl/mcapi|wolfssl/m4|wolfssl/IDE/WORKBENCH|wolfssl/IDE/WIN|wolfssl/IDE/ROWLEY-CROSSWORKS-ARM|wolfssl/IDE/MYSQL|wolfssl/IDE/MDK-ARM|wolfssl/IDE/MDK5-ARM|wolfssl/IDE/LPCXPRESSO/wolf_demo|wolfssl/IDE/LPCXPRESSO/lpc_chip_18xx|wolfssl/IDE/LPCXPRESSO/lpc_board_nxp_lpcxpresso_1837|wolfssl/IDE/iOS|wolfssl/IDE/IAR-EWARM|wolfssl/examples|wolfssl/certs|wolfssl/build-aux|wolfssl/autom4te.cache|wolfssl/wolfcrypt/src/aes_asm.s|wolfssl/wolfcrypt/src/aes_asm.asm|wolfssl/wolfssl/wolfcrypt/user-crypto" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name=""/>
 					</sourceEntries>
 				</configuration>
 			</storageModule>
