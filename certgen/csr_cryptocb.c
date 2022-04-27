@@ -32,6 +32,7 @@
 #include <wolfssl/wolfcrypt/asn_public.h>
 #include <wolfssl/wolfcrypt/error-crypt.h>
 #include <wolfssl/wolfcrypt/cryptocb.h>
+#include <wolfssl/wolfcrypt/logging.h>
 
 #define LARGE_TEMP_SZ 4096
 
@@ -52,6 +53,8 @@
 
 
 #ifdef ENABLE_CSR_EXAMPLE
+static RsaKey* rsaPriv = NULL;
+
 static void usage(void)
 {
     printf("Invalid input supplied try one of the below examples\n");
@@ -90,25 +93,22 @@ static int myCryptoCb(int devIdArg, wc_CryptoInfo* info, void* ctx)
         byte   der[LARGE_TEMP_SZ];
         word32 derSz;
 
-        ret = load_key_file(myCtx->keyFilePriv, der, &derSz, 0);
-        if (ret != 0) {
-            printf("Error %d loading %s\n", ret, myCtx->keyFilePriv);
-            return ret;
+        if (info->pk.type == WC_PK_TYPE_RSA_KEYGEN) {
+            return CRYPTOCB_UNAVAILABLE;
         }
 
     #ifndef NO_RSA
         if (info->pk.type == WC_PK_TYPE_RSA) {
+            /* set devId to invalid, so software is used */
+            info->pk.rsa.key->devId = INVALID_DEVID;
             switch (info->pk.rsa.type) {
                 case RSA_PUBLIC_ENCRYPT:
                 case RSA_PUBLIC_DECRYPT:
-                    /* set devId to invalid, so software is used */
-                    info->pk.rsa.key->devId = INVALID_DEVID;
                     /* perform software based RSA public op */
                     ret = wc_RsaFunction(
                         info->pk.rsa.in, info->pk.rsa.inLen,
                         info->pk.rsa.out, info->pk.rsa.outLen,
                         info->pk.rsa.type, info->pk.rsa.key, info->pk.rsa.rng);
-                    info->pk.rsa.key->devId = devIdArg; /* reset devId */
                     break;
                 case RSA_PRIVATE_ENCRYPT:
                 case RSA_PRIVATE_DECRYPT:
@@ -124,16 +124,22 @@ static int myCryptoCb(int devIdArg, wc_CryptoInfo* info, void* ctx)
                         wc_FreeRsaKey(&rsaPriv);
                         return ret;
                     }
+
+                    WOLFSSL_BUFFER(info->pk.rsa.in, info->pk.rsa.inLen);
                 
                     /* perform software based RSA private op */
                     ret = wc_RsaFunction(
                         info->pk.rsa.in, info->pk.rsa.inLen,
                         info->pk.rsa.out, info->pk.rsa.outLen,
-                        info->pk.rsa.type, &rsaPriv, info->pk.rsa.rng);
-                    wc_FreeRsaKey(&rsaPriv);
+                        info->pk.rsa.type, rsaPriv, info->pk.rsa.rng);
+
+                    if (rsaPriv == &rsaPrivTmp)
+                        wc_FreeRsaKey(rsaPriv);
+
                     break;
                 }
             }
+            info->pk.rsa.key->devId = devIdArg; /* reset devId */
         }
     #endif /* !NO_RSA */
     #ifdef HAVE_ECC
@@ -328,6 +334,10 @@ static int gen_csr(const char* arg1)
         return NOT_COMPILED_IN;
     }
 
+#ifdef DEBUG_WOLFSSL
+    wolfSSL_Debugging_ON();
+#endif
+
     wolfCrypt_Init();
 
     /* register a devID for crypto callbacks */
@@ -340,34 +350,6 @@ static int gen_csr(const char* arg1)
     ret = wc_InitRng(&rng);
     if (ret != 0) {
         printf("RNG initialization failed: %d\n", ret);
-        goto exit;
-    }
-
-    /* setup test key */
-#ifdef HAVE_ECC
-    if (type == ECC_TYPE) {
-        myCtx.keyFilePub =  ECC_KEYPUB_FILE;
-        myCtx.keyFilePriv = ECC_KEY_FILE;
-    }
-#endif
-#ifndef NO_RSA
-    if (type == RSA_TYPE) {
-        myCtx.keyFilePub =  RSA_KEYPUB_FILE;
-        myCtx.keyFilePriv = RSA_KEY_FILE;
-    }
-#endif
-#ifdef HAVE_ED25519
-    if (type == ED25519_TYPE) {
-        myCtx.keyFilePub =  ED25519_KEYPUB_FILE;
-        myCtx.keyFilePriv = ED25519_KEY_FILE;
-    }
-#endif
-
-    /* convert PEM to DER */
-    derSz = sizeof(der);
-    ret = load_key_file(myCtx.keyFilePub, der, &derSz, 1);
-    if (ret != 0) {
-        printf("Error %d loading the public key %s\n", ret, myCtx.keyFilePub);
         goto exit;
     }
 
@@ -395,6 +377,39 @@ static int gen_csr(const char* arg1)
         goto exit;
     }
 
+    /* setup test key */
+    derSz = sizeof(der);
+#ifdef WOLFSSL_KEY_GEN
+    /* new RSA Key */
+    rsaPriv = &rsaKeyPub;
+    ret = wc_MakeRsaKey(&rsaKeyPub, 2048, WC_RSA_EXPONENT, &rng);
+    derSz = wc_RsaKeyToPublicDer(&rsaKeyPub, der, derSz);
+#else
+#ifdef HAVE_ECC
+    if (type == ECC_TYPE) {
+        myCtx.keyFilePub =  ECC_KEYPUB_FILE;
+        myCtx.keyFilePriv = ECC_KEY_FILE;
+    }
+#endif
+#ifndef NO_RSA
+    if (type == RSA_TYPE) {
+        myCtx.keyFilePub =  RSA_KEYPUB_FILE;
+        myCtx.keyFilePriv = RSA_KEY_FILE;
+    }
+#endif
+#ifdef HAVE_ED25519
+    if (type == ED25519_TYPE) {
+        myCtx.keyFilePub =  ED25519_KEYPUB_FILE;
+        myCtx.keyFilePriv = ED25519_KEY_FILE;
+    }
+#endif
+
+    /* convert PEM to DER */
+    ret = load_key_file(myCtx.keyFilePub, der, &derSz, 1);
+    if (ret != 0) {
+        printf("Error %d loading the public key %s\n", ret, myCtx.keyFilePub);
+        goto exit;
+    }
     /* decode public key */
 #ifdef HAVE_ECC
     if (type == ECC_TYPE) {
@@ -415,6 +430,8 @@ static int gen_csr(const char* arg1)
         printf("Key decode failed: %d\n", ret);
         goto exit;
     }
+
+#endif /* WOLFSSL_KEY_GEN */
 
     /* setup the CSR data */
     ret = wc_InitCert(&req);
