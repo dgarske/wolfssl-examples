@@ -52,6 +52,7 @@ void hexdump(const void *buffer, word32 len, byte cols)
 }
 
 #ifdef HAVE_ECC
+#define TEST_RAW_IMPORT_EXPORT
 int ecc_sign_verify_test(enum wc_HashType hash_type, enum wc_SignatureType sig_type,
     byte* fileBuf, int fileLen, byte* verifyFileBuf, int verifyFileLen)
 {
@@ -60,8 +61,13 @@ int ecc_sign_verify_test(enum wc_HashType hash_type, enum wc_SignatureType sig_t
     WC_RNG rng;
     byte* sigBuf = NULL;
     word32 sigLen;
+#ifdef TEST_RAW_IMPORT_EXPORT
+    byte eccPubX[MAX_ECC_BYTES], eccPubY[MAX_ECC_BYTES], eccPriv[MAX_ECC_BYTES];
+    word32 eccPubXSz = (word32)sizeof(eccPubX), eccPubYSz = (word32)sizeof(eccPubY), eccPrivSz = (word32)sizeof(eccPriv);
+#else
     byte eccPubKeyBuf[ECC_BUFSIZE], eccPrivKeyBuf[ECC_BUFSIZE];
     word32 eccPubKeyLen, eccPrivKeyLen;
+#endif
 
     /* Init */
     wc_InitRng(&rng);
@@ -73,11 +79,28 @@ int ecc_sign_verify_test(enum wc_HashType hash_type, enum wc_SignatureType sig_t
         printf("ECC Make Key Failed! %d\n", ret);
     }
 
+#ifdef TEST_RAW_IMPORT_EXPORT
+    ret = wc_ecc_export_ex(&eccKey, eccPubX, &eccPubXSz, eccPubY, &eccPubYSz,
+        eccPriv, &eccPrivSz, WC_TYPE_UNSIGNED_BIN);
+    printf("wc_ecc_export_ex %d\n", ret);
+    printf("ECC Public X: Len %d\n", eccPubXSz);
+    hexdump(eccPubX, eccPubXSz, 16);
+    printf("ECC Public Y: Len %d\n", eccPubYSz);
+    hexdump(eccPubY, eccPubYSz, 16);
+    printf("ECC Private: Len %d\n", eccPrivSz);
+    hexdump(eccPriv, eccPrivSz, 16);
+
+    wc_ecc_free(&eccKey);
+    wc_ecc_init(&eccKey);
+    ret = wc_ecc_import_unsigned(&eccKey, eccPubX, eccPubY, eccPriv, ECC_SECP256R1);
+    printf("wc_ecc_import_unsigned %d\n", ret);
+#else
+
     /* Display public key data */
     eccPubKeyLen = ECC_BUFSIZE;
     ret = wc_ecc_export_x963(&eccKey, eccPubKeyBuf, &eccPubKeyLen);
     if (ret != 0) {
-        printf("ECC public key x963 export failed! %d\n", ret);
+        printf("ECC public key export failed! %d\n", ret);
         ret = EXIT_FAILURE;
         goto exit;
     }
@@ -94,6 +117,7 @@ int ecc_sign_verify_test(enum wc_HashType hash_type, enum wc_SignatureType sig_t
     }
     printf("ECC Private Key: Len %d\n", eccPrivKeyLen);
     hexdump(eccPrivKeyBuf, eccPrivKeyLen, 16);
+#endif
 
     if (verifyFileBuf) {
         sigLen = verifyFileLen;
@@ -138,7 +162,11 @@ int ecc_sign_verify_test(enum wc_HashType hash_type, enum wc_SignatureType sig_t
     wc_ecc_init(&eccKey);
 
     /* Import the public key */
+#ifdef TEST_RAW_IMPORT_EXPORT
+    ret = wc_ecc_import_unsigned(&eccKey, eccPubX, eccPubY, NULL, ECC_SECP256R1);
+#else
     ret = wc_ecc_import_x963(eccPubKeyBuf, eccPubKeyLen, &eccKey);
+#endif
     if (ret != 0) {
         printf("ECC public key import failed! %d\n", ret);
         ret = EXIT_FAILURE;
