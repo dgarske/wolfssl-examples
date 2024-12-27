@@ -26,19 +26,24 @@
 #include <wolfssl/wolfcrypt/sha256.h>
 #include <wolfssl/wolfcrypt/ecc.h>
 #include <wolfssl/wolfcrypt/random.h>
+#include <wolfssl/wolfcrypt/wc_port.h>
 
 #define MAX_FIRMWARE_LEN (1024 * 1024)
 static const int gFwLen = MAX_FIRMWARE_LEN;
 static const int gFwChunkLen = 128;
 static byte gFwBuf[MAX_FIRMWARE_LEN];
-static ecc_key gMyKey;
-static int gMyKeyInit = 0;
-static const int gSignTimes = 10;
+static const int gSignTimes = 1;
 
 //#define ENABLE_BUF_PRINT
-#define ECC_KEY_SIZE  48
-#define ECC_KEY_CURVE ECC_SECP384R1
+#define ECC_KEY_SIZE  32
+#define ECC_KEY_CURVE ECC_SECP256R1
 
+/* func_args from test.h, so don't have to pull in other stuff */
+typedef struct func_args {
+    int    argc;
+    char** argv;
+    int    return_code;
+} func_args;
 
 #ifdef ENABLE_BUF_PRINT
 static void PrintBuffer(const byte* buffer, word32 length)
@@ -110,45 +115,92 @@ static int HashFirmware(byte* hashBuf)
     return ret;
 }
 
+#include <wolfssl/wolfcrypt/mem_track.h>
+
+#ifdef WOLFSSL_TRACK_MEMORY_VERBOSE
+static long heap_baselineAllocs;
+static long heap_baselineBytes;
+
+#define PRINT_HEAP_INIT() { \
+    (void)wolfCrypt_heap_peakAllocs_checkpoint();                \
+    heap_baselineAllocs = wolfCrypt_heap_peakAllocs_checkpoint();\
+    (void)wolfCrypt_heap_peakBytes_checkpoint();                 \
+    heap_baselineBytes = wolfCrypt_heap_peakBytes_checkpoint();  \
+}
+
+#define PRINT_HEAP_CHECKPOINT() {                                            \
+    const ssize_t _rha = wolfCrypt_heap_peakAllocs_checkpoint() - heap_baselineAllocs; \
+    const ssize_t _rhb = wolfCrypt_heap_peakBytes_checkpoint() - heap_baselineBytes;   \
+    printf("    relative heap peak usage: %ld alloc%s, %ld bytes\n",         \
+           (long int)_rha,                                                   \
+           _rha == 1 ? "" : "s",                                             \
+           (long int)_rhb);                                                  \
+    heap_baselineAllocs = wolfCrypt_heap_peakAllocs_checkpoint();            \
+    heap_baselineBytes = wolfCrypt_heap_peakBytes_checkpoint();              \
+    }
+#else
+#define PRINT_HEAP_INIT() WC_DO_NOTHING
+#define PRINT_HEAP_CHECKPOINT() WC_DO_NOTHING
+#endif
+
+#ifdef HAVE_STACK_SIZE_VERBOSE
+#define TEST_CHECKPOINT(...) {                              \
+    STACK_SIZE_CHECKPOINT(printf(__VA_ARGS__));             \
+    PRINT_HEAP_CHECKPOINT();                                \
+}
+#else
+#define TEST_CHECKPOINT(...) WC_DO_NOTHING
+#endif
+
+
 static int SignFirmware(byte* hashBuf, word32 hashLen, byte* sigBuf, word32* sigLen)
 {
     int ret = 0;
     WC_RNG rng;
+    ecc_key key;
+
+    TEST_CHECKPOINT("SignFirmware: Start\n");
 
     ret = wc_InitRng(&rng);
     if (ret != 0)
         return ret;
+    TEST_CHECKPOINT("SignFirmware: InitRNG\n");
 
     /* generate key for testing if one hasn't been created */
-    if (gMyKeyInit == 0) {
-        ret = wc_ecc_init(&gMyKey);
+    ret = wc_ecc_init(&key);
+    if (ret == 0) {
+        ret = wc_ecc_make_key_ex(&rng, ECC_KEY_SIZE, &key, ECC_KEY_CURVE);
         if (ret == 0) {
-            ret = wc_ecc_make_key_ex(&rng, ECC_KEY_SIZE, &gMyKey, ECC_KEY_CURVE);
-            if (ret == 0) {
-                gMyKeyInit = 1;
-                printf("KeyGen Done\n");
-            }
+            printf("KeyGen Done\n");
         }
     }
+    TEST_CHECKPOINT("SignFirmware: MakeKey\n");
 
     /* sign hash */
     if (ret == 0) {
-        ret = wc_ecc_sign_hash(hashBuf, hashLen, sigBuf, sigLen, &rng, &gMyKey);
+        ret = wc_ecc_sign_hash(hashBuf, hashLen, sigBuf, sigLen, &rng, &key);
+        TEST_CHECKPOINT("SignFirmware: Sign\n");
         printf("Sign ret %d, sigLen %d\n", ret, *sigLen);
     }
     if (ret == 0) {
         int is_valid_sig = 0;
         ret = wc_ecc_verify_hash(sigBuf, *sigLen, hashBuf, hashLen,
-            &is_valid_sig, &gMyKey);
+            &is_valid_sig, &key);
+        TEST_CHECKPOINT("SignFirmware: Verify\n");
         printf("Verify ret %d, is_valid_sig %d\n", ret, is_valid_sig);
     }
 
     wc_FreeRng(&rng);
+    wc_ecc_free(&key);
 
     return ret;
 }
 
-int main(void)
+#ifdef HAVE_STACK_SIZE
+THREAD_RETURN WOLFSSL_THREAD ecc_test(void* args)
+#else
+wc_test_ret_t ecc_test(void* args)
+#endif
 {
     int ret;
     byte hashBuf[WC_SHA256_DIGEST_SIZE];
@@ -156,6 +208,9 @@ int main(void)
     byte sigBuf[ECC_MAX_SIG_SIZE];
     word32 sigLen = ECC_MAX_SIG_SIZE;
     int i;
+
+    STACK_SIZE_INIT();
+    PRINT_HEAP_INIT();
 
     /* init bogus firmware */
     for (i=0; i<gFwLen; i++) {
@@ -180,6 +235,25 @@ int main(void)
         PrintBuffer(sigBuf, sigLen);
     #endif
     }
+    EXIT_TEST(ret);
+}
 
-    return ret;
+int main(int argc, char** argv)
+{
+    func_args args = { 0, 0, 0 };
+
+    args.argc = argc;
+    args.argv = argv;
+
+    wolfCrypt_Init();
+
+#ifdef HAVE_STACK_SIZE
+    StackSizeCheck(&args, ecc_test);
+#else
+    ecc_test(&args);
+#endif
+
+    wolfCrypt_Cleanup();
+
+    return args.return_code;
 }
