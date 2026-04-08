@@ -37,6 +37,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <time.h>
 
 #if defined(HAVE_OCSP) && defined(HAVE_OCSP_RESPONDER) && \
     !defined(NO_FILESYSTEM)

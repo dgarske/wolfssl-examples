@@ -120,10 +120,14 @@ static int RecvHttp(int fd, byte* buf, int bufSz)
                 headerEnd = (int)(hdrEnd - (char*)buf) + 4;
                 cl = strstr((char*)buf, "Content-Length:");
                 if (!cl) cl = strstr((char*)buf, "content-length:");
-                if (cl) contentLen = atoi(cl + 15);
+                if (cl) {
+                    long val = strtol(cl + 15, NULL, 10);
+                    if (val > 0 && val < bufSz)
+                        contentLen = (int)val;
+                }
             }
         }
-        if (headerEnd && total >= headerEnd + contentLen)
+        if (headerEnd && contentLen > 0 && total >= headerEnd + contentLen)
             break;
     }
     return total;
@@ -150,16 +154,34 @@ static int ParsePost(const byte* http, int httpSz,
 
     cl = strstr(hdr, "Content-Length:");
     if (!cl) cl = strstr(hdr, "content-length:");
-    if (cl)
-        *bodySz = atoi(cl + 15);
-    else
+    if (cl) {
+        long val = strtol(cl + 15, NULL, 10);
+        if (val <= 0 || val > httpSz - offset)
+            return -1;
+        *bodySz = (int)val;
+    }
+    else {
         *bodySz = httpSz - offset;
+    }
 
     if (offset + *bodySz > httpSz)
         return -1;
 
     *body = http + offset;
     return 0;
+}
+
+static int SendAll(int fd, const void* data, int sz)
+{
+    const byte* p = (const byte*)data;
+    int remaining = sz;
+    while (remaining > 0) {
+        int n = (int)send(fd, p, (size_t)remaining, 0);
+        if (n < 0) return -1;
+        p += n;
+        remaining -= n;
+    }
+    return sz;
 }
 
 static void SendOcspResp(int fd, const byte* resp, int respSz)
@@ -173,8 +195,8 @@ static void SendOcspResp(int fd, const byte* resp, int respSz)
         "Content-Length: %d\r\n"
         "\r\n", respSz);
 
-    send(fd, hdr, (size_t)hdrLen, 0);
-    send(fd, resp, (size_t)respSz, 0);
+    SendAll(fd, hdr, hdrLen);
+    SendAll(fd, resp, respSz);
 }
 
 static void SendHttpError(int fd, int code, const char* msg)
@@ -182,7 +204,7 @@ static void SendHttpError(int fd, int code, const char* msg)
     char buf[256];
     int len = snprintf(buf, sizeof(buf),
         "HTTP/1.0 %d %s\r\nContent-Length: 0\r\n\r\n", code, msg);
-    send(fd, buf, (size_t)len, 0);
+    SendAll(fd, buf, len);
 }
 
 int main(int argc, char** argv)
@@ -197,7 +219,7 @@ int main(int argc, char** argv)
     int caCertInit = 0;
     char caSubject[256];
     word32 caSubjectSz = sizeof(caSubject);
-    int sockfd, clientfd, opt = 1, i;
+    int sockfd = -1, clientfd, opt = 1, i;
     struct sockaddr_in addr;
 
     if (argc < 4) {
@@ -265,7 +287,14 @@ int main(int argc, char** argv)
     }
 
     sockfd = socket(AF_INET, SOCK_STREAM, 0);
-    setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    if (sockfd < 0) {
+        perror("socket");
+        goto cleanup;
+    }
+    if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
+        perror("setsockopt");
+        goto cleanup;
+    }
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = INADDR_ANY;
@@ -275,7 +304,10 @@ int main(int argc, char** argv)
         perror("bind");
         goto cleanup;
     }
-    listen(sockfd, 5);
+    if (listen(sockfd, 5) < 0) {
+        perror("listen");
+        goto cleanup;
+    }
     printf("OCSP responder listening on port %d\n", port);
 
     while (running) {
@@ -308,10 +340,10 @@ int main(int argc, char** argv)
         close(clientfd);
     }
 
-    close(sockfd);
     printf("\nShutdown.\n");
 
 cleanup:
+    if (sockfd >= 0) close(sockfd);
     if (responder) wc_OcspResponder_free(responder);
     if (caCertInit) wc_FreeDecodedCert(&caCert);
     free(caCertDer);
