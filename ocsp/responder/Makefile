@@ -6,7 +6,7 @@
 
 CC       = gcc
 WOLFSSL_INSTALL_DIR = /usr/local
-CFLAGS   = -Wall -g -I$(WOLFSSL_INSTALL_DIR)/include
+CFLAGS   = -Wall -Wextra -g -I$(WOLFSSL_INSTALL_DIR)/include
 LIBS     = -L$(WOLFSSL_INSTALL_DIR)/lib -lwolfssl
 
 # Uncomment for static linking:

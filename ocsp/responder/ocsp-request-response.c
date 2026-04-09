@@ -172,6 +172,7 @@ int main(int argc, char** argv)
             wolfSSL_CertManagerFree(tmpCm);
             goto cleanup;
         }
+        ret = 0; /* Reset from WOLFSSL_SUCCESS (1) to 0 for error paths */
         wc_InitDecodedCert(&serverCert, serverCertDer,
                            (word32)serverCertDerSz, NULL);
         serverCertInit = 1;
@@ -311,6 +312,7 @@ int main(int argc, char** argv)
         printf("Error loading CA into CertManager: %d\n", ret);
         goto cleanup;
     }
+    ret = 0; /* Reset from WOLFSSL_SUCCESS (1) to 0 for error paths */
 
     ocsp = wc_NewOCSP(cm);
     if (ocsp == NULL) {

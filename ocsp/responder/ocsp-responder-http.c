@@ -52,6 +52,8 @@
 
 #include "ocsp-load-certs.h"
 
+#include <strings.h>
+
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <unistd.h>
@@ -60,6 +62,22 @@
 #define BUF_SZ 65536
 
 static volatile int running = 1;
+
+/* Case-insensitive substring search (for HTTP headers per RFC 7230) */
+static char* FindHeaderCI(const char* haystack, const char* needle)
+{
+    size_t nLen = strlen(needle);
+    while (*haystack) {
+        if (strncasecmp(haystack, needle, nLen) == 0)
+            return (char*)haystack;
+        haystack++;
+    }
+    return NULL;
+}
+
+/* Large buffers as static globals to avoid 128KB on the stack each iteration */
+static byte httpBuf[BUF_SZ];
+static byte respBuf[BUF_SZ];
 
 static void sigHandler(int sig)
 {
@@ -118,8 +136,7 @@ static int RecvHttp(int fd, byte* buf, int bufSz)
             if (hdrEnd) {
                 char* cl;
                 headerEnd = (int)(hdrEnd - (char*)buf) + 4;
-                cl = strstr((char*)buf, "Content-Length:");
-                if (!cl) cl = strstr((char*)buf, "content-length:");
+                cl = FindHeaderCI((char*)buf, "Content-Length:");
                 if (cl) {
                     long val = strtol(cl + 15, NULL, 10);
                     if (val > 0 && val < bufSz)
@@ -152,8 +169,7 @@ static int ParsePost(const byte* http, int httpSz,
     if (!end) return -1;
     offset = (int)(end - hdr) + 4;
 
-    cl = strstr(hdr, "Content-Length:");
-    if (!cl) cl = strstr(hdr, "content-length:");
+    cl = FindHeaderCI(hdr, "Content-Length:");
     if (cl) {
         long val = strtol(cl + 15, NULL, 10);
         if (val <= 0 || val > httpSz - offset)
@@ -177,7 +193,7 @@ static int SendAll(int fd, const void* data, int sz)
     int remaining = sz;
     while (remaining > 0) {
         int n = (int)send(fd, p, (size_t)remaining, 0);
-        if (n < 0) return -1;
+        if (n <= 0) return -1;
         p += n;
         remaining -= n;
     }
@@ -219,7 +235,7 @@ int main(int argc, char** argv)
     int caCertInit = 0;
     char caSubject[256];
     word32 caSubjectSz = sizeof(caSubject);
-    int sockfd = -1, clientfd, opt = 1, i;
+    int sockfd = -1, clientfd, opt = 1, i, ret = 0;
     struct sockaddr_in addr;
 
     if (argc < 4) {
@@ -244,12 +260,17 @@ int main(int argc, char** argv)
         sigemptyset(&sa.sa_mask);
         sigaction(SIGINT, &sa, NULL);
         sigaction(SIGTERM, &sa, NULL);
+
+        /* Ignore SIGPIPE so client disconnections during writes don't crash */
+        sa.sa_handler = SIG_IGN;
+        sigaction(SIGPIPE, &sa, NULL);
     }
 
     caCertDer = LoadCertDer(certFile, &caCertDerSz);
     caKeyDer = LoadKeyDer(keyFile, &caKeyDerSz);
     if (!caCertDer || !caKeyDer) {
         fprintf(stderr, "Error loading cert/key\n");
+        ret = -1;
         goto cleanup;
     }
 
@@ -257,17 +278,20 @@ int main(int argc, char** argv)
     caCertInit = 1;
     if (wc_ParseCert(&caCert, CERT_TYPE, 0, NULL) != 0) {
         fprintf(stderr, "Error parsing CA cert\n");
+        ret = -1;
         goto cleanup;
     }
 
     if (wc_GetDecodedCertSubject(&caCert, caSubject, &caSubjectSz) != 0) {
         fprintf(stderr, "Error getting CA subject\n");
+        ret = -1;
         goto cleanup;
     }
 
     responder = wc_OcspResponder_new(NULL, 1);
     if (!responder) {
         fprintf(stderr, "Error creating responder\n");
+        ret = -1;
         goto cleanup;
     }
 
@@ -275,6 +299,7 @@ int main(int argc, char** argv)
                                    caKeyDer, (word32)caKeyDerSz,
                                    NULL, 0) != 0) {
         fprintf(stderr, "Error adding signer\n");
+        ret = -1;
         goto cleanup;
     }
 
@@ -289,10 +314,12 @@ int main(int argc, char** argv)
     sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if (sockfd < 0) {
         perror("socket");
+        ret = -1;
         goto cleanup;
     }
     if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
         perror("setsockopt");
+        ret = -1;
         goto cleanup;
     }
     memset(&addr, 0, sizeof(addr));
@@ -302,23 +329,29 @@ int main(int argc, char** argv)
 
     if (bind(sockfd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
         perror("bind");
+        ret = -1;
         goto cleanup;
     }
     if (listen(sockfd, 5) < 0) {
         perror("listen");
+        ret = -1;
         goto cleanup;
     }
     printf("OCSP responder listening on port %d\n", port);
 
     while (running) {
-        byte httpBuf[BUF_SZ];
-        byte respBuf[BUF_SZ];
         word32 respSz;
         const byte* ocspReq;
         int ocspReqSz, recvLen;
+        struct timeval tv;
 
         clientfd = accept(sockfd, NULL, NULL);
         if (clientfd < 0) continue;
+
+        /* Set receive timeout so incomplete requests don't block forever */
+        tv.tv_sec = 5;
+        tv.tv_usec = 0;
+        setsockopt(clientfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
         recvLen = RecvHttp(clientfd, httpBuf, BUF_SZ);
         if (recvLen <= 0 ||
@@ -349,7 +382,7 @@ cleanup:
     free(caCertDer);
     free(caKeyDer);
     wolfSSL_Cleanup();
-    return 0;
+    return ret;
 }
 
 #else
