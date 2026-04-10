@@ -92,12 +92,12 @@ echo ""
 # --- Step 1: Start wolfclu OCSP responder in SCGI mode ---
 echo "Starting wolfclu OCSP responder (SCGI on port $SCGI_PORT)..."
 
-WOLFCLU_ARGS="-scgi -port $SCGI_PORT -rsigner $CA_CERT -rkey $CA_KEY -CA $CA_CERT"
+set -- -scgi -port "$SCGI_PORT" -rsigner "$CA_CERT" -rkey "$CA_KEY" -CA "$CA_CERT"
 if [ -n "$INDEX_FILE" ]; then
-    WOLFCLU_ARGS="$WOLFCLU_ARGS -index $INDEX_FILE"
+    set -- "$@" -index "$INDEX_FILE"
 fi
 
-wolfssl ocsp $WOLFCLU_ARGS &
+wolfssl ocsp "$@" &
 WOLFCLU_PID=$!
 sleep 1
 
