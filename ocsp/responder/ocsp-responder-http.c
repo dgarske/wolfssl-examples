@@ -237,6 +237,7 @@ int main(int argc, char** argv)
     word32 caSubjectSz = sizeof(caSubject);
     int sockfd = -1, clientfd, opt = 1, i, ret = 0;
     struct sockaddr_in addr;
+    struct sigaction sa;
 
     if (argc < 4) {
         printf("Usage: %s <port> <ca-cert> <ca-key> [good-cert ...]\n\n"
@@ -252,19 +253,20 @@ int main(int argc, char** argv)
     certFile = argv[2];
     keyFile  = argv[3];
 
-    wolfSSL_Init();
-    {
-        struct sigaction sa;
-        sa.sa_handler = sigHandler;
-        sa.sa_flags = 0; /* No SA_RESTART so accept() returns on signal */
-        sigemptyset(&sa.sa_mask);
-        sigaction(SIGINT, &sa, NULL);
-        sigaction(SIGTERM, &sa, NULL);
-
-        /* Ignore SIGPIPE so client disconnections during writes don't crash */
-        sa.sa_handler = SIG_IGN;
-        sigaction(SIGPIPE, &sa, NULL);
+    if (wolfSSL_Init() != WOLFSSL_SUCCESS) {
+        fprintf(stderr, "wolfSSL_Init failed\n");
+        return 1;
     }
+
+    sa.sa_handler = sigHandler;
+    sa.sa_flags = 0; /* No SA_RESTART so accept() returns on signal */
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGINT, &sa, NULL);
+    sigaction(SIGTERM, &sa, NULL);
+
+    /* Ignore SIGPIPE so client disconnections during writes don't crash */
+    sa.sa_handler = SIG_IGN;
+    sigaction(SIGPIPE, &sa, NULL);
 
     caCertDer = LoadCertDer(certFile, &caCertDerSz);
     caKeyDer = LoadKeyDer(keyFile, &caKeyDerSz);

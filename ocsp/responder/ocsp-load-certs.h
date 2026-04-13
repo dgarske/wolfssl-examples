@@ -46,6 +46,7 @@ static WC_MAYBE_UNUSED byte* LoadFile(const char* path, int* outSz)
     if (!buf) { fclose(f); return NULL; }
     *outSz = (int)fread(buf, 1, (size_t)sz, f);
     fclose(f);
+    if (*outSz != (int)sz) { free(buf); return NULL; }
     return buf;
 }
 
