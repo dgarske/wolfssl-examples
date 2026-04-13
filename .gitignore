@@ -313,6 +313,8 @@ hash/sha512-hash
 ocsp/ocsp_nonblock/ocsp_nonblock
 ocsp/stapling/ocsp-client
 ocsp/stapling/ocsp-server
+ocsp/responder/ocsp-request-response
+ocsp/responder/ocsp-responder-http
 
 sslkeylog.log
 
