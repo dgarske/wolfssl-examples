@@ -54,13 +54,16 @@ profiles:
     flags: "--enable-opensslall --enable-opensslextra --enable-static --enable-shared"
 
   crypto:
-    # union of crypto/*: 3des, aes, aes-modes, camellia, ascon, keywrap, pkcs12
+    # union of crypto/* and hash/*: 3des, aes, aes-modes, camellia, ascon,
+    # keywrap, kdf, pkcs12, siphash, blake2
     flags: >-
       --enable-pwdbased --enable-des3 --enable-camellia --enable-ascon
       --enable-experimental --enable-aesgcm-stream --enable-aesccm --enable-aesctr
       --enable-aescfb --enable-aesofb --enable-aeseax --enable-aessiv
       --enable-aesxts --enable-aeskeywrap --enable-keygen --enable-certgen
-      --enable-certext --enable-pkcs12 --enable-static --enable-shared
+      --enable-certext --enable-pkcs12 --enable-blake2 --enable-blake2s
+      --enable-siphash --enable-hkdf --enable-scrypt
+      --enable-static --enable-shared
     # aes-cts and aes-ecb have no configure flag: without these defines both
     # compile to a stub main() that prints "not compiled in" and returns 0.
     # WC_RNG_SEED_CB likewise has no --enable of its own (only opensslextra and
@@ -87,7 +90,7 @@ profiles:
     flags: >-
       --enable-ecc --enable-ed25519 --enable-ed448 --enable-curve25519
       --enable-curve448 --enable-keygen --enable-rsapss --enable-srp --enable-hpke
-      --enable-aesgcm --enable-static --enable-shared
+      --enable-aesgcm --enable-eccsi --enable-sakke --enable-static --enable-shared
     # WOLFSSL_RSA_KEY_CHECK has no configure option: pk/rsa-kg calls
     # wc_CheckRsaKey, which rsa.c only defines under that macro.
     cflags: "-DWOLFSSL_PUBLIC_MP -DUSE_CERT_BUFFERS_2048 -DWOLFSSL_ECDSA_DETERMINISTIC_K -DWOLFSSL_RSA_KEY_CHECK"
@@ -146,7 +149,7 @@ profiles:
     # so without it the client dies on "failed to set the requested group".
     flags: >-
       --enable-mlkem --enable-dilithium --enable-lms --enable-xmss
-      --enable-extra-pqc-hybrids
+      --enable-extra-pqc-hybrids --enable-slhdsa=yes,sha2
       --enable-experimental --enable-tls13 --enable-static --enable-shared
 
   acert:
@@ -345,6 +348,11 @@ examples:
     # openssl dgst, so these assert the algorithm is right, not just that it ran.
     # input.txt is tracked -- if it changes on purpose, recompute these.
 
+  - id: hash-blake2
+    path: hash/blake2
+    profile: crypto
+    mode: check
+
   - id: embedded
     path: embedded
     profile: default
@@ -405,6 +413,11 @@ examples:
     profile: crypto
     mode: check
 
+  - id: crypto-kdf
+    path: crypto/kdf
+    profile: crypto
+    mode: check
+
   - id: crypto-keywrap
     path: crypto/keywrap
     profile: crypto
@@ -414,6 +427,19 @@ examples:
     path: crypto/pkcs12
     profile: crypto
     mode: check
+
+  - id: crypto-siphash
+    path: crypto/siphash
+    profile: crypto
+    mode: check
+
+  - id: crypto-sm
+    path: crypto/sm
+    mode: skip
+    reason: >-
+      SM2/SM3/SM4 live in the separate wolfSSL/wolfsm overlay, which must be
+      installed into the wolfSSL source tree before configure. No cached
+      profile can express that patch step yet.
 
   - id: signature
     path: signature
@@ -590,6 +616,11 @@ examples:
     profile: pq
     mode: check
 
+  - id: pq-slh-dsa
+    path: pq/slh_dsa
+    profile: pq
+    mode: check
+
   - id: pq-stateful-hash-sig
     path: pq/stateful_hash_sig
     profile: pq
@@ -740,6 +771,10 @@ examples:
     mode: check
   - id: pk-hpke
     path: pk/hpke
+    profile: pk
+    mode: check
+  - id: pk-mikey-sakke
+    path: pk/mikey-sakke
     profile: pk
     mode: check
   - id: pk-rsa-kg
