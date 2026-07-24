@@ -20,3 +20,10 @@ make
 ```
 
 
+
+srp_sha256.c runs a complete SRP-6a exchange (enrollment through mutual proof
+verification) using SHA-256 and the RFC 5054 2048-bit group:
+
+```
+./srp_sha256
+```
