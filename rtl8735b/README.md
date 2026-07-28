@@ -13,6 +13,7 @@ It is built inside the RealTek AmebaPro2 FreeRTOS SDK (which provides the startu
 - HMAC-SHA256 under the HUK (`wc_HmacInit` with `devId = WC_HUK_DEVID`, then `wc_HmacSetKey`/`wc_HmacUpdate`/`wc_HmacFinal`): the MAC is deterministic for a given seed and differs for a wrong seed.
 - HUK-bound ECDSA P-256 sign: a key is generated in software, its private scalar is wrapped under the HUK (ECB-encrypted with the HUK device), and signing then goes through the HUK device (unwrap + sign); the signature verifies against the software public key.
 - HW ECDSA P-256 verify offload: the same signature is then verified through the HW engine (the public point is imported into a `WC_HUK_DEVID` key so `wc_ecc_verify_hash` dispatches to `hal_ecdsa`), and a tampered digest is shown to be rejected. No HUK context is needed to verify -- any P-256 public key.
+- **Plaintext-key AES (second device):** with `WOLFSSL_RTL8735B_AES` also enabled (see `user_settings.h`), the example registers a second crypto-callback device, `wc_Rtl8735b_AesRegister(WC_RTL8735B_AES_DEVID)`, that runs a caller-supplied AES key directly on the HW engine with no HUK binding. It reproduces a published AES-GCM test vector (proving the key is used verbatim), then encrypts the same 32 key bytes through both devices to show the plaintext-key ciphertext differs from the HUK device-bound ciphertext -- the two devices coexist and are selected per `Aes` by `devId`.
 
 ## Prerequisites
 

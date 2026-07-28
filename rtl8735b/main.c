@@ -126,6 +126,119 @@ static void huk_gcm_test(void)
     ForceZero(seed, sizeof(seed));   /* scrub key material before return */
 }
 
+#ifdef WOLFSSL_RTL8735B_AES
+/* AES-GCM with a plaintext key through the second device (WC_RTL8735B_AES_DEVID).
+ * Unlike the HUK device, the key bytes are the actual AES key, so the output
+ * matches a published GCM vector. Then the same 32 key bytes are run through
+ * both devices to show they coexist and are selected per Aes by devId: the
+ * plaintext-key ciphertext differs from the HUK device-bound ciphertext. */
+static void plain_gcm_test(void)
+{
+    Aes  aes;
+    /* McGrew & Viega GCM test case 3: 128-bit key, 64-byte payload, no AAD. */
+    static const byte katKey[16] = {
+        0xfe,0xff,0xe9,0x92,0x86,0x65,0x73,0x1c,
+        0x6d,0x6a,0x8f,0x94,0x67,0x30,0x83,0x08
+    };
+    static const byte katIv[12] = {
+        0xca,0xfe,0xba,0xbe,0xfa,0xce,0xdb,0xad,0xde,0xca,0xf8,0x88
+    };
+    static const byte katPt[64] = {
+        0xd9,0x31,0x32,0x25,0xf8,0x84,0x06,0xe5,
+        0xa5,0x59,0x09,0xc5,0xaf,0xf5,0x26,0x9a,
+        0x86,0xa7,0xa9,0x53,0x15,0x34,0xf7,0xda,
+        0x2e,0x4c,0x30,0x3d,0x8a,0x31,0x8a,0x72,
+        0x1c,0x3c,0x0c,0x95,0x95,0x68,0x09,0x53,
+        0x2f,0xcf,0x0e,0x24,0x49,0xa6,0xb5,0x25,
+        0xb1,0x6a,0xed,0xf5,0xaa,0x0d,0xe6,0x57,
+        0xba,0x63,0x7b,0x39,0x1a,0xaf,0xd2,0x55
+    };
+    static const byte katCt[64] = {
+        0x42,0x83,0x1e,0xc2,0x21,0x77,0x74,0x24,
+        0x4b,0x72,0x21,0xb7,0x84,0xd0,0xd4,0x9c,
+        0xe3,0xaa,0x21,0x2f,0x2c,0x02,0xa4,0xe0,
+        0x35,0xc1,0x7e,0x23,0x29,0xac,0xa1,0x2e,
+        0x21,0xd5,0x14,0xb2,0x54,0x66,0x93,0x1c,
+        0x7d,0x8f,0x6a,0x5a,0xac,0x84,0xaa,0x05,
+        0x1b,0xa3,0x0b,0x39,0x6a,0x0a,0xac,0x97,
+        0x3d,0x58,0xe0,0x91,0x47,0x3f,0x59,0x85
+    };
+    static const byte katTag[16] = {
+        0x4d,0x5c,0x2a,0xf3,0x27,0xcd,0x64,0xa6,
+        0x2c,0xf3,0x5a,0xbd,0x2b,0xa6,0xfa,0xb4
+    };
+    /* HAL crypto engine requires 32-byte-aligned key/iv/buffers. */
+    byte key[32]   __attribute__((aligned(32)));
+    byte iv[12]    __attribute__((aligned(32)));
+    byte pt[64]    __attribute__((aligned(32)));
+    byte ct[64]    __attribute__((aligned(32)));
+    byte ctHuk[64] __attribute__((aligned(32)));
+    byte dec[64]   __attribute__((aligned(32)));
+    byte tag[16]   __attribute__((aligned(32)));
+    byte tagHuk[16] __attribute__((aligned(32)));
+    int  ret;
+
+    dbg_printf("\r\n== AES-GCM with a plaintext key "
+               "(devId=WC_RTL8735B_AES_DEVID) ==\r\n");
+
+    /* Known-answer test: the plaintext key must reproduce the published vector. */
+    memcpy(iv, katIv, sizeof(iv));
+    memcpy(pt, katPt, sizeof(pt));
+    ret = wc_AesInit(&aes, NULL, WC_RTL8735B_AES_DEVID);
+    CHECK("AesInit(devId=WC_RTL8735B_AES_DEVID)", ret == 0);
+    if (ret != 0) {
+        return;
+    }
+    ret = wc_AesGcmSetKey(&aes, katKey, sizeof(katKey));
+    CHECK("AesGcmSetKey(plaintext 128-bit key)", ret == 0);
+    if (ret == 0) {
+        ret = wc_AesGcmEncrypt(&aes, ct, pt, sizeof(pt), iv, sizeof(iv),
+                               tag, sizeof(tag), NULL, 0);
+        CHECK("AesGcmEncrypt", ret == 0);
+    }
+    CHECK("ciphertext matches published vector",
+          ret == 0 && memcmp(ct, katCt, sizeof(katCt)) == 0);
+    CHECK("tag matches published vector",
+          ret == 0 && memcmp(tag, katTag, sizeof(katTag)) == 0);
+    if (ret == 0) {
+        ret = wc_AesGcmDecrypt(&aes, dec, ct, sizeof(ct), iv, sizeof(iv),
+                               tag, sizeof(tag), NULL, 0);
+        CHECK("AesGcmDecrypt verifies", ret == 0);
+        CHECK("plaintext round-trips", memcmp(dec, pt, sizeof(pt)) == 0);
+    }
+    wc_AesFree(&aes);
+
+    /* Coexistence: same 32 key bytes -> plaintext device vs HUK device produce
+     * different ciphertext (one uses the key verbatim, the other as a seed). */
+    memset(key, 0x5A, sizeof(key));
+    ret = wc_AesInit(&aes, NULL, WC_RTL8735B_AES_DEVID);
+    if (ret == 0) {
+        ret = wc_AesGcmSetKey(&aes, key, sizeof(key));
+    }
+    if (ret == 0) {
+        ret = wc_AesGcmEncrypt(&aes, ct, pt, sizeof(pt), iv, sizeof(iv),
+                               tag, sizeof(tag), NULL, 0);
+    }
+    wc_AesFree(&aes);
+    CHECK("plaintext-key encrypt (256-bit)", ret == 0);
+    if (ret == 0) {
+        ret = wc_AesInit(&aes, NULL, WC_HUK_DEVID);
+        if (ret == 0) {
+            ret = wc_AesGcmSetKey(&aes, key, sizeof(key));
+        }
+        if (ret == 0) {
+            ret = wc_AesGcmEncrypt(&aes, ctHuk, pt, sizeof(pt), iv, sizeof(iv),
+                                   tagHuk, sizeof(tagHuk), NULL, 0);
+        }
+        wc_AesFree(&aes);
+        CHECK("HUK-seed encrypt (same 32 bytes)", ret == 0);
+        CHECK("plaintext CT != HUK CT (distinct keys per devId)",
+              ret == 0 && memcmp(ct, ctHuk, sizeof(ct)) != 0);
+    }
+    ForceZero(key, sizeof(key));   /* scrub key material before return */
+}
+#endif /* WOLFSSL_RTL8735B_AES */
+
 static void huk_ecb_cbc_test(void)
 {
     Aes  aes;
@@ -580,6 +693,12 @@ static void wolf_huk_thread(void* param)
         ret = wc_Rtl8735b_HukRegister(WC_HUK_DEVID);
         CHECK("wc_Rtl8735b_HukRegister", ret == 0);
     }
+#ifdef WOLFSSL_RTL8735B_AES
+    if (ret == 0) {
+        ret = wc_Rtl8735b_AesRegister(WC_RTL8735B_AES_DEVID);
+        CHECK("wc_Rtl8735b_AesRegister", ret == 0);
+    }
+#endif
     if (ret == 0) {
         huk_gcm_test();
         huk_ecb_cbc_test();
@@ -589,6 +708,10 @@ static void wolf_huk_thread(void* param)
         huk_gcm_badiv_test();
         huk_hmac_test();
         huk_ecdsa_test();
+#ifdef WOLFSSL_RTL8735B_AES
+        plain_gcm_test();
+        wc_Rtl8735b_AesUnRegister(WC_RTL8735B_AES_DEVID);
+#endif
         wc_Rtl8735b_HukUnRegister(WC_HUK_DEVID);
     }
     wolfCrypt_Cleanup();
