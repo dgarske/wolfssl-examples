@@ -172,14 +172,6 @@ int main(int argc, char* argv[])
         goto exit;
     }
 
-    ret = wc_SlhDsaKey_ExportPublic(&key, pub, &pubLen);
-    if (ret != 0) {
-        printf("error: wc_SlhDsaKey_ExportPublic returned %d\n", ret);
-        goto exit;
-    }
-    if (verbose)
-        dump_hex("pub key", pub, pubLen);
-
     /* ctx=NULL/ctxSz=0 signs with an empty FIPS 205 context string. */
     printf("info: signing message\n");
     ret = wc_SlhDsaKey_Sign(&key, NULL, 0, (const byte*)msg,
@@ -191,23 +183,45 @@ int main(int argc, char* argv[])
     if (verbose)
         dump_hex("signature", sig, sigLen);
 
-    ret = wc_SlhDsaKey_Verify(&key, NULL, 0, (const byte*)msg,
-                              (word32)strlen(msg), sig, sigLen);
+    ret = wc_SlhDsaKey_ExportPublic(&key, pub, &pubLen);
     if (ret != 0) {
-        printf("error: wc_SlhDsaKey_Verify returned %d\n", ret);
+        printf("error: wc_SlhDsaKey_ExportPublic returned %d\n", ret);
         goto exit;
     }
-    printf("info: verify message good\n");
+    if (verbose)
+        dump_hex("pub key", pub, pubLen);
 
-    /* A modified message must fail verification. */
-    sig[0] ^= 0x80;
-    ret = wc_SlhDsaKey_Verify(&key, NULL, 0, (const byte*)msg,
-                              (word32)strlen(msg), sig, sigLen);
-    if (ret == 0) {
-        printf("error: verify of corrupted signature succeeded\n");
-        ret = -1;
-        goto exit;
+    /* --- Verify with public key --- */
+    {
+        SlhDsaKey pubKey;
+        ret = wc_SlhDsaKey_Init(&pubKey, param, NULL, INVALID_DEVID);
+        if (ret != 0) goto exit;
+        /* - only have pub key - */
+        wc_SlhDsaKey_ImportPublic(&pubKey, pub, pubLen);
+        ret = wc_SlhDsaKey_Verify(&pubKey, NULL, 0, (const byte*)msg,
+                                  (word32)strlen(msg), sig, sigLen);
+        if (ret != 0) {
+            printf("error: wc_SlhDsaKey_Verify returned %d\n", ret);
+        wc_SlhDsaKey_Free(&pubKey);
+            goto exit;
+        }
+        printf("info: verify message good\n");
+
+        /* A modified message must fail verification. */
+        sig[0] ^= 0x80;
+        ret = wc_SlhDsaKey_Verify(&pubKey, NULL, 0, (const byte*)msg,
+                                  (word32)strlen(msg), sig, sigLen);
+        if (ret == 0) {
+            printf("error: verify of corrupted signature succeeded\n");
+            ret = -1;
+            wc_SlhDsaKey_Free(&pubKey);
+            goto exit;
+        }
+
+        wc_SlhDsaKey_Free(&pubKey);
     }
+    /* --- Verify with public key --- */
+
     sig[0] ^= 0x80;
     printf("info: corrupted signature rejected as expected\n");
 
