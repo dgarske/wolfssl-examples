@@ -177,68 +177,74 @@ int main(void)
 
 
     /* --- KMS setup: master keys --- */
+    {
+        /* - KMS setup: eccsi keys - */
+        ret = wc_MakeEccsiKey(&kms.kmsEccsi, &rng);
+        if (ret != 0) {
+            printf("wc_MakeEccsiKey failed %d\n", ret);
+            goto exit;
+        }
+        /* - KMS setup: eccsi keys - */
 
-    /* - KMS setup: eccsi keys - */
-    ret = wc_MakeEccsiKey(&kms.kmsEccsi, &rng);
-    if (ret != 0) {
-        printf("wc_MakeEccsiKey failed %d\n", ret);
-        goto exit;
+        /* - KMS setup: sakke keys - */
+        ret = wc_MakeSakkeKey(&kms.kmsSakke, &rng);
+        if (ret != 0) {
+            printf("wc_MakeSakkeKey failed %d\n", ret);
+            goto exit;
+        }
+        printf("KMS: master ECCSI and SAKKE keys made\n");
+        /* - KMS setup: sakke keys - */
     }
-    /* - KMS setup: eccsi keys - */
-
-    /* - KMS setup: sakke keys - */
-    ret = wc_MakeSakkeKey(&kms.kmsSakke, &rng);
-    if (ret != 0) {
-        printf("wc_MakeSakkeKey failed %d\n", ret);
-        goto exit;
-    }
-    printf("KMS: master ECCSI and SAKKE keys made\n");
-    /* - KMS setup: sakke keys - */
-
     /* --- KMS setup: master keys --- */
 
 
     /* --- Enroll Alice with KMS to get their keys --- */
-
-    /* - Get PublicKeys from KMS (Simulate KMS sending pubkeys only) - */
-    KmsCertficate.kmsAuthPublicKeySz = ECCSI_PUB_KEY_SZ;
-    ret = wc_ExportEccsiPublicKey(&kms.kmsEccsi,
-            KmsCertficate.kmsAuthPublicKey,
-            &KmsCertficate.kmsAuthPublicKeySz, 1);
-
-    if (ret != 0){printf("could not export pub eccsi key from KMS"); goto exit;}
-
-    KmsCertficate.kmsSakkePublicKeySz = SAKKE_PUB_KEY_SZ;
-    ret = wc_ExportSakkePublicKey(&kms.kmsSakke,
-            KmsCertficate.kmsSakkePublicKey,
-            &KmsCertficate.kmsSakkePublicKeySz, 1);
-    if (ret != 0){printf("could not export pub sakke key from KMS"); goto exit;}
-    /* - Get PublicKeys from KMS (Simulate KMS sending pubkeys only) - */
-
-    /* - Save public key from KMS - */
-    ret = wc_ImportEccsiPublicKey(&Alice.publicKeyEccsi,
+    {
+        /* - Get PublicKeys from KMS (Simulate KMS sending pubkeys only) - */
+        KmsCertficate.kmsAuthPublicKeySz = ECCSI_PUB_KEY_SZ;
+        ret = wc_ExportEccsiPublicKey(&kms.kmsEccsi,
                 KmsCertficate.kmsAuthPublicKey,
-                KmsCertficate.kmsAuthPublicKeySz, 1);
-    if (ret == 0)
-        ret = wc_ImportSakkePublicKey(&Alice.publicKeySakke,
-                                      KmsCertficate.kmsSakkePublicKey,
-                                      KmsCertficate.kmsSakkePublicKeySz, 1);
-    if (ret != 0) {printf("Unable to transfer kms public keys"); goto exit;}
-    /* - Save public key from KMS - */
+                &KmsCertficate.kmsAuthPublicKeySz, 1);
 
-    /* - Get Signing pair from KMS - */
-    ret = wc_MakeEccsiPair(&kms.kmsEccsi, &rng, WC_HASH_TYPE_SHA256,
-                (byte*)Alice.id, sizeof(aliceId), &Alice.secretSigningKey,
-                Alice.publicValidationToken);
-    if (ret != 0) {printf("Unable to make signing pairs"); goto exit;}
-    /* - Get Sining pair from KMS - */
+        if (ret != 0) {
+            printf("could not export pub eccsi key from KMS");
+            goto exit;
+        }
 
-    /* - Get Issue Recivier Key - */
-    ret = wc_MakeSakkeRsk(&kms.kmsSakke, (byte*)Alice.id,
-            sizeof(aliceId), Alice.receiverSecretKey);
-    if (ret != 0) {printf("Unable to make receiver secret key"); goto exit;}
-    /* - Get Issue Recivier Key - */
+        KmsCertficate.kmsSakkePublicKeySz = SAKKE_PUB_KEY_SZ;
+        ret = wc_ExportSakkePublicKey(&kms.kmsSakke,
+                KmsCertficate.kmsSakkePublicKey,
+                &KmsCertficate.kmsSakkePublicKeySz, 1);
+        if (ret != 0) {
+            printf("could not export pub sakke key from KMS");
+            goto exit;
+        }
+        /* - Get PublicKeys from KMS (Simulate KMS sending pubkeys only) - */
 
+        /* - Save public key from KMS - */
+        ret = wc_ImportEccsiPublicKey(&Alice.publicKeyEccsi,
+                    KmsCertficate.kmsAuthPublicKey,
+                    KmsCertficate.kmsAuthPublicKeySz, 1);
+        if (ret == 0)
+            ret = wc_ImportSakkePublicKey(&Alice.publicKeySakke,
+                                          KmsCertficate.kmsSakkePublicKey,
+                                          KmsCertficate.kmsSakkePublicKeySz, 1);
+        if (ret != 0) {printf("Unable to transfer kms public keys"); goto exit;}
+        /* - Save public key from KMS - */
+
+        /* - Get Signing pair from KMS - */
+        ret = wc_MakeEccsiPair(&kms.kmsEccsi, &rng, WC_HASH_TYPE_SHA256,
+                    (byte*)Alice.id, sizeof(aliceId), &Alice.secretSigningKey,
+                    Alice.publicValidationToken);
+        if (ret != 0) {printf("Unable to make signing pairs"); goto exit;}
+        /* - Get Sining pair from KMS - */
+
+        /* - Get Issue Recivier Key - */
+        ret = wc_MakeSakkeRsk(&kms.kmsSakke, (byte*)Alice.id,
+                sizeof(aliceId), Alice.receiverSecretKey);
+        if (ret != 0) {printf("Unable to make receiver secret key"); goto exit;}
+        /* - Get Issue Recivier Key - */
+    }
     /* --- Enroll Alice with KMS to get their keys --- */
 
     /* --- Reset Kms Cert for Bob --- */
@@ -246,46 +252,52 @@ int main(void)
     /* --- Reset Kms Cert for Bob --- */
 
     /* --- Enroll Bob with KMS to get their keys --- */
-
-    /* - Get PublicKeys from KMS (Simulate KMS sending pubkeys only) - */
-    KmsCertficate.kmsAuthPublicKeySz = ECCSI_PUB_KEY_SZ;
-    ret = wc_ExportEccsiPublicKey(&kms.kmsEccsi,
-            KmsCertficate.kmsAuthPublicKey,
-            &KmsCertficate.kmsAuthPublicKeySz, 1);
-
-    if (ret != 0){printf("could not export pub eccsi key from KMS"); goto exit;}
-
-    KmsCertficate.kmsSakkePublicKeySz = SAKKE_PUB_KEY_SZ;
-    ret = wc_ExportSakkePublicKey(&kms.kmsSakke,
-            KmsCertficate.kmsSakkePublicKey,
-            &KmsCertficate.kmsSakkePublicKeySz, 1);
-    if (ret != 0){printf("could not export pub sakke key from KMS"); goto exit;}
-    /* - Get PublicKeys from KMS (Simulate KMS sending pubkeys only) - */
-
-    /* - Save public key from KMS - */
-    ret = wc_ImportEccsiPublicKey(&Bob.publicKeyEccsi,
+    {
+        /* - Get PublicKeys from KMS (Simulate KMS sending pubkeys only) - */
+        KmsCertficate.kmsAuthPublicKeySz = ECCSI_PUB_KEY_SZ;
+        ret = wc_ExportEccsiPublicKey(&kms.kmsEccsi,
                 KmsCertficate.kmsAuthPublicKey,
-                KmsCertficate.kmsAuthPublicKeySz, 1);
-    if (ret == 0)
-        ret = wc_ImportSakkePublicKey(&Bob.publicKeySakke,
-                                      KmsCertficate.kmsSakkePublicKey,
-                                      KmsCertficate.kmsSakkePublicKeySz, 1);
-    if (ret != 0) {printf("Unable to transfer kms public keys"); goto exit;}
-    /* - Save public key from KMS - */
+                &KmsCertficate.kmsAuthPublicKeySz, 1);
 
-    /* - Get Signing pair from KMS - */
-    ret = wc_MakeEccsiPair(&kms.kmsEccsi, &rng, WC_HASH_TYPE_SHA256,
-                (byte*)Bob.id, sizeof(bobId), &Bob.secretSigningKey,
-                Bob.publicValidationToken);
-    if (ret != 0) {printf("Unable to make signing pairs"); goto exit;}
-    /* - Get Sining pair from KMS - */
+        if (ret != 0) {
+            printf("could not export pub eccsi key from KMS");
+            goto exit;
+        }
 
-    /* - Get Issue Recivier Key - */
-    ret = wc_MakeSakkeRsk(&kms.kmsSakke, (byte*)Bob.id,
-            sizeof(bobId), Bob.receiverSecretKey);
-    if (ret != 0) {printf("Unable to make receiver secret key"); goto exit;}
-    /* - Get Issue Recivier Key - */
+        KmsCertficate.kmsSakkePublicKeySz = SAKKE_PUB_KEY_SZ;
+        ret = wc_ExportSakkePublicKey(&kms.kmsSakke,
+                KmsCertficate.kmsSakkePublicKey,
+                &KmsCertficate.kmsSakkePublicKeySz, 1);
+        if (ret != 0) {
+            printf("could not export pub sakke key from KMS");
+            goto exit;
+        }
+        /* - Get PublicKeys from KMS (Simulate KMS sending pubkeys only) - */
 
+        /* - Save public key from KMS - */
+        ret = wc_ImportEccsiPublicKey(&Bob.publicKeyEccsi,
+                    KmsCertficate.kmsAuthPublicKey,
+                    KmsCertficate.kmsAuthPublicKeySz, 1);
+        if (ret == 0)
+            ret = wc_ImportSakkePublicKey(&Bob.publicKeySakke,
+                                          KmsCertficate.kmsSakkePublicKey,
+                                          KmsCertficate.kmsSakkePublicKeySz, 1);
+        if (ret != 0) {printf("Unable to transfer kms public keys"); goto exit;}
+        /* - Save public key from KMS - */
+
+        /* - Get Signing pair from KMS - */
+        ret = wc_MakeEccsiPair(&kms.kmsEccsi, &rng, WC_HASH_TYPE_SHA256,
+                    (byte*)Bob.id, sizeof(bobId), &Bob.secretSigningKey,
+                    Bob.publicValidationToken);
+        if (ret != 0) {printf("Unable to make signing pairs"); goto exit;}
+        /* - Get Sining pair from KMS - */
+
+        /* - Get Issue Recivier Key - */
+        ret = wc_MakeSakkeRsk(&kms.kmsSakke, (byte*)Bob.id,
+                sizeof(bobId), Bob.receiverSecretKey);
+        if (ret != 0) {printf("Unable to make receiver secret key"); goto exit;}
+        /* - Get Issue Recivier Key - */
+    }
     /* --- Enroll Bob with KMS to get their keys --- */
 
     /* --- Alice Creates Message --- */
