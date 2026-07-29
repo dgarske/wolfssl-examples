@@ -19,12 +19,22 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-/* Example of HPKE (RFC 9180) context reuse: one KEM encapsulation protecting
- * a sequence of messages.
+/* Example of HPKE (RFC 9180) context reuse: one KEM encapsulation protecting a
+ * whole sequence of messages.
  *
- * wc_HpkeSealBase() does a fresh key encapsulation per message. With a
- * seal/open context the encapsulation happens once and each message gets the
- * next AEAD nonce, so both sides must process messages in the same order. */
+ * wc_HpkeSealBase() runs a fresh key encapsulation for every message it
+ * protects. With a seal/open context the encapsulation happens once and each
+ * message consumes the next AEAD nonce in the sequence, so both sides must
+ * process the messages in the same order.
+ *
+ * Roles in this example:
+ *   Receiver: owns the long term HPKE key pair and publishes the public half.
+ *             The private half never leaves them.
+ *   Sender:   looks up the receiver's public key, makes an ephemeral key pair,
+ *             derives a seal context from the two and seals each message.
+ *
+ * Everything that crosses the wire lives in the Message struct: the serialized
+ * ephemeral public key (the KEM encapsulation) plus the ciphertexts. */
 
 #include <stdio.h>
 #include <string.h>
@@ -39,7 +49,7 @@
     defined(HAVE_AESGCM)
 
 #define NUM_MSGS 3
-#define TAG_SZ   16
+#define TAG_SZ   16                   /* AES-GCM authentication tag */
 #define MAX_MSG  64
 
 static const char* msgs[NUM_MSGS] = {
@@ -48,92 +58,197 @@ static const char* msgs[NUM_MSGS] = {
     "third message"
 };
 
+static const char* info = "hpke context example";
+static const char* aad  = "message aad";
+
+static void print_hex(const char* label, const byte* data, word32 len)
+{
+    word32 i;
+
+    printf("%s: ", label);
+    for (i = 0; i < len; i++)
+        printf("%02x", data[i]);
+    printf("\n");
+}
+
 int main(void)
 {
-    int             ret;
-    int             i;
-    Hpke            hpke[1];
-    HpkeBaseContext sealCtx[1];
-    HpkeBaseContext openCtx[1];
-    WC_RNG          rng[1];
-    int             rngInit = 0;
-    void*           receiverKey = NULL;
-    void*           ephemeralKey = NULL;
-    byte            pubKey[HPKE_Npk_MAX];
-    word16          pubKeySz = (word16)sizeof(pubKey);
-    byte            cipher[NUM_MSGS][MAX_MSG + TAG_SZ];
-    byte            plain[MAX_MSG];
-    const char*     info = "hpke context example";
-    const char*     aad = "message aad";
 
+    int        ret;
+    int        i;
+
+    WC_RNG     rng;
+    int        rngInit = 0;
+
+    /* Every struct below is declared before the first "goto exit" so that the
+     * cleanup at the bottom always sees initialised members. */
+    struct {
+        Hpke            suite;          /* KEM/KDF/AEAD ids, agreed in advance */
+        void*           staticKey;      /* long term pair, private half kept */
+        HpkeBaseContext openCtx;
+        byte            plain[MAX_MSG];
+    } Receiver = {0};
+
+    struct {
+        Hpke            suite;          /* same suite, separate instance */
+        void*           receiverKey;    /* Sender view: public key only */
+        void*           ephemeralKey;   /* fresh per conversation */
+        HpkeBaseContext sealCtx;
+    } Sender = {0};
+
+    struct {
+        byte       receiverPubKey[HPKE_Npk_MAX];  /* what Receiver publishes */
+        word16     receiverPubKeySz;
+    } Directory = {0};
+
+    struct {
+        byte       ephemeralPubKey[HPKE_Npk_MAX]; /* the KEM encapsulation */
+        word16     ephemeralPubKeySz;
+        byte       cipher[NUM_MSGS][MAX_MSG + TAG_SZ];
+        word32     cipherSz[NUM_MSGS];  /* body length; the tag follows it */
+    } Message = {0};
+
+    /* --- Setup Receiver --- */
+    /* Curve25519 when available, otherwise P-256. Both sides must pick the
+     * same triple or the key schedule will not line up. */
 #if defined(HAVE_CURVE25519)
-    ret = wc_HpkeInit(hpke, DHKEM_X25519_HKDF_SHA256, HKDF_SHA256,
-                      HPKE_AES_128_GCM, NULL);
+    ret = wc_HpkeInit(&Receiver.suite, DHKEM_X25519_HKDF_SHA256, HKDF_SHA256,
+            HPKE_AES_128_GCM, NULL);
 #else
-    ret = wc_HpkeInit(hpke, DHKEM_P256_HKDF_SHA256, HKDF_SHA256,
-                      HPKE_AES_128_GCM, NULL);
+    ret = wc_HpkeInit(&Receiver.suite, DHKEM_P256_HKDF_SHA256, HKDF_SHA256,
+            HPKE_AES_128_GCM, NULL);
 #endif
-    if (ret != 0)
-        goto exit;
+    if (ret != 0) {printf("Receiver could not init HPKE suite\n"); goto exit;}
+    /* --- Setup Receiver --- */
 
-    ret = wc_InitRng(rng);
-    if (ret != 0)
-        goto exit;
-    rngInit = 1;
+    /* --- Setup Sender --- */
+#if defined(HAVE_CURVE25519)
+    ret = wc_HpkeInit(&Sender.suite, DHKEM_X25519_HKDF_SHA256, HKDF_SHA256,
+            HPKE_AES_128_GCM, NULL);
+#else
+    ret = wc_HpkeInit(&Sender.suite, DHKEM_P256_HKDF_SHA256, HKDF_SHA256,
+            HPKE_AES_128_GCM, NULL);
+#endif
+    if (ret != 0) {printf("Sender could not init HPKE suite\n"); goto exit;}
+    /* --- Setup Sender --- */
 
-    ret = wc_HpkeGenerateKeyPair(hpke, &receiverKey, rng);
-    if (ret == 0)
-        ret = wc_HpkeGenerateKeyPair(hpke, &ephemeralKey, rng);
-    if (ret != 0)
+    /* --- One rng instance for simplicity -- */
+    ret = wc_InitRng(&rng);
+    if (ret != 0) {
+        printf("wc_InitRng failed %d\n", ret);
         goto exit;
-
-    /* Sender: one encapsulation, then seal each message in order. */
-    ret = wc_HpkeInitSealContext(hpke, sealCtx, ephemeralKey, receiverKey,
-                                 (byte*)info, (word32)strlen(info));
-    if (ret != 0)
-        goto exit;
-
-    for (i = 0; i < NUM_MSGS; i++) {
-        ret = wc_HpkeContextSealBase(hpke, sealCtx, (byte*)aad,
-                                     (word32)strlen(aad), (byte*)msgs[i],
-                                     (word32)strlen(msgs[i]), cipher[i]);
-        if (ret != 0)
-            goto exit;
-        printf("sealed message %d (%zu bytes)\n", i, strlen(msgs[i]));
     }
+    rngInit = 1;
+    /* --- One rng instance for simplicity -- */
 
-    /* Only the ephemeral public key travels to the receiver. */
-    ret = wc_HpkeSerializePublicKey(hpke, ephemeralKey, pubKey, &pubKeySz);
-    if (ret != 0)
-        goto exit;
+    /* --- Receiver publishes a static public key --- */
+    {
+        /* - Make the long term pair - */
+        ret = wc_HpkeGenerateKeyPair(&Receiver.suite, &Receiver.staticKey,
+                &rng);
+        if (ret != 0) {printf("Receiver could not make key pair\n"); goto exit;}
+        /* - Make the long term pair - */
 
-    /* Receiver: decapsulate once, then open in the same order. */
-    ret = wc_HpkeInitOpenContext(hpke, openCtx, receiverKey, pubKey, pubKeySz,
-                                 (byte*)info, (word32)strlen(info));
-    if (ret != 0)
-        goto exit;
+        /* - Publish the public half (Simulate a key directory) - */
+        Directory.receiverPubKeySz = (word16)sizeof(Directory.receiverPubKey);
+        ret = wc_HpkeSerializePublicKey(&Receiver.suite, Receiver.staticKey,
+                Directory.receiverPubKey, &Directory.receiverPubKeySz);
+        if (ret != 0) {printf("Could not serialize receiver key\n"); goto exit;}
+        printf("Receiver: static HPKE key pair made and published\n");
+        /* - Publish the public half (Simulate a key directory) - */
+    }
+    /* --- Receiver publishes a static public key --- */
 
-    for (i = 0; i < NUM_MSGS; i++) {
-        word32 msgSz = (word32)strlen(msgs[i]);
+    /* --- Sender looks up the Receiver and makes an ephemeral key --- */
+    {
+        /* - Sender only ever holds the public key - */
+        ret = wc_HpkeDeserializePublicKey(&Sender.suite, &Sender.receiverKey,
+                Directory.receiverPubKey, Directory.receiverPubKeySz);
+        if (ret != 0) {printf("Could not import receiver key\n"); goto exit;}
+        /* - Sender only ever holds the public key - */
 
-        memset(plain, 0, sizeof(plain));
-        ret = wc_HpkeContextOpenBase(hpke, openCtx, (byte*)aad,
-                                     (word32)strlen(aad), cipher[i], msgSz,
-                                     plain);
-        if (ret != 0)
-            goto exit;
-        if (memcmp(plain, msgs[i], msgSz) != 0) {
-            printf("message %d mismatch\n", i);
-            ret = -1;
+        /* - Fresh ephemeral pair, one per conversation - */
+        ret = wc_HpkeGenerateKeyPair(&Sender.suite, &Sender.ephemeralKey, &rng);
+        if (ret != 0) {
+            printf("Sender could not make ephemeral key\n");
             goto exit;
         }
-        printf("opened message %d: %.*s\n", i, (int)msgSz, plain);
+        /* - Fresh ephemeral pair, one per conversation - */
     }
+    /* --- Sender looks up the Receiver and makes an ephemeral key --- */
 
-    /* Replaying a message out of sequence uses the wrong nonce and fails. */
-    ret = wc_HpkeContextOpenBase(hpke, openCtx, (byte*)aad,
-                                 (word32)strlen(aad), cipher[0],
-                                 (word32)strlen(msgs[0]), plain);
+    /* --- Sender Creates Messages --- */
+    {
+        /* - Encapsulate once; the context carries the nonce sequence - */
+        ret = wc_HpkeInitSealContext(&Sender.suite, &Sender.sealCtx,
+                Sender.ephemeralKey, Sender.receiverKey, (byte*)info,
+                (word32)strlen(info));
+        if (ret != 0) {printf("Could not init seal context\n"); goto exit;}
+        /* - Encapsulate once; the context carries the nonce sequence - */
+
+        /* - Seal each message in order - */
+        for (i = 0; i < NUM_MSGS; i++) {
+            Message.cipherSz[i] = (word32)strlen(msgs[i]);
+            if (Message.cipherSz[i] > MAX_MSG) {
+                printf("message %d too long for buffer\n", i);
+                ret = BUFFER_E;
+                goto exit;
+            }
+            ret = wc_HpkeContextSealBase(&Sender.suite, &Sender.sealCtx,
+                    (byte*)aad, (word32)strlen(aad), (byte*)msgs[i],
+                    Message.cipherSz[i], Message.cipher[i]);
+            if (ret != 0) {printf("Could not seal message %d\n", i); goto exit;}
+            printf("sealed message %d (%u bytes)\n", i,
+                    (unsigned int)Message.cipherSz[i]);
+        }
+        /* - Seal each message in order - */
+
+        /* - Only the ephemeral public key travels alongside the ciphertexts - */
+        Message.ephemeralPubKeySz = (word16)sizeof(Message.ephemeralPubKey);
+        ret = wc_HpkeSerializePublicKey(&Sender.suite, Sender.ephemeralKey,
+                Message.ephemeralPubKey, &Message.ephemeralPubKeySz);
+        if (ret != 0) {printf("Could not serialize ephemeral key\n"); goto exit;}
+        print_hex("KEM encapsulation", Message.ephemeralPubKey,
+                Message.ephemeralPubKeySz);
+        /* - Only the ephemeral public key travels alongside the ciphertexts - */
+
+        /* - Messages are ready to send - */
+    }
+    /* --- Sender Creates Messages --- */
+
+    /* --- Receiver opens the messages --- */
+    {
+        /* - Decapsulate once with the private half - */
+        ret = wc_HpkeInitOpenContext(&Receiver.suite, &Receiver.openCtx,
+                Receiver.staticKey, Message.ephemeralPubKey,
+                Message.ephemeralPubKeySz, (byte*)info, (word32)strlen(info));
+        if (ret != 0) {printf("Could not init open context\n"); goto exit;}
+        /* - Decapsulate once with the private half - */
+
+        /* - Open in the same order the Sender sealed - */
+        for (i = 0; i < NUM_MSGS; i++) {
+            memset(Receiver.plain, 0, sizeof(Receiver.plain));
+            ret = wc_HpkeContextOpenBase(&Receiver.suite, &Receiver.openCtx,
+                    (byte*)aad, (word32)strlen(aad), Message.cipher[i],
+                    Message.cipherSz[i], Receiver.plain);
+            if (ret != 0) {printf("Could not open message %d\n", i); goto exit;}
+
+            if (memcmp(Receiver.plain, msgs[i], Message.cipherSz[i]) != 0) {
+                printf("message %d mismatch\n", i);
+                ret = -1;
+                goto exit;
+            }
+            printf("opened message %d: %.*s\n", i, (int)Message.cipherSz[i],
+                    Receiver.plain);
+        }
+        /* - Open in the same order the Sender sealed - */
+    }
+    /* --- Receiver opens the messages --- */
+
+    /* --- A replay lands on the wrong nonce and is rejected --- */
+    ret = wc_HpkeContextOpenBase(&Receiver.suite, &Receiver.openCtx,
+            (byte*)aad, (word32)strlen(aad), Message.cipher[0],
+            Message.cipherSz[0], Receiver.plain);
     if (ret == 0) {
         printf("out-of-order open succeeded unexpectedly\n");
         ret = -1;
@@ -141,6 +256,7 @@ int main(void)
     }
     printf("out-of-order open rejected as expected\n");
     ret = 0;
+    /* --- A replay lands on the wrong nonce and is rejected --- */
 
     printf("HPKE context test success\n");
 
@@ -148,12 +264,20 @@ exit:
     if (ret != 0)
         printf("HPKE context test error %d: %s\n", ret,
                wc_GetErrorString(ret));
-    if (ephemeralKey != NULL)
-        wc_HpkeFreeKey(hpke, hpke->kem, ephemeralKey, NULL);
-    if (receiverKey != NULL)
-        wc_HpkeFreeKey(hpke, hpke->kem, receiverKey, NULL);
+
+    if (Sender.ephemeralKey != NULL)
+        wc_HpkeFreeKey(&Sender.suite, Sender.suite.kem, Sender.ephemeralKey,
+                NULL);
+    if (Sender.receiverKey != NULL)
+        wc_HpkeFreeKey(&Sender.suite, Sender.suite.kem, Sender.receiverKey,
+                NULL);
+
+    if (Receiver.staticKey != NULL)
+        wc_HpkeFreeKey(&Receiver.suite, Receiver.suite.kem, Receiver.staticKey,
+                NULL);
+
     if (rngInit)
-        wc_FreeRng(rng);
+        wc_FreeRng(&rng);
 
     return ret == 0 ? 0 : 1;
 }
@@ -167,4 +291,4 @@ int main(void)
     return 0;
 }
 
-#endif
+#endif /* HAVE_HPKE && (HAVE_ECC || HAVE_CURVE25519) && HAVE_AESGCM */
