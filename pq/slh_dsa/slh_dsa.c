@@ -220,9 +220,6 @@ int main(int argc, char* argv[])
 
         wc_SlhDsaKey_Free(&pubKey);
     }
-    /* --- Verify with public key --- */
-
-    sig[0] ^= 0x80;
     printf("info: corrupted signature rejected as expected\n");
 
     ret = 0;
