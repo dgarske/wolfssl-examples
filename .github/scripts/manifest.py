@@ -60,6 +60,16 @@ def load(path=MANIFEST):
 
 def validate(data):
     profiles = data.get("profiles") or {}
+    # Matches the `overlay` input of .github/actions/setup-wolfssl: either a
+    # bare repo name (latest on master) or "name@branchOrTagOrCommit". The
+    # action resolves the name to a URL, so an unknown one fails there, not here.
+    for name, p in profiles.items():
+        overlay = (p or {}).get("overlay")
+        if overlay and not re.fullmatch(r"[a-z0-9-]+(@[^\s@]+)?", overlay):
+            sys.exit(
+                f"manifest: profile '{name}': overlay must be 'name' or "
+                f"'name@branchOrTagOrCommit', got '{overlay}'"
+            )
     seen = set()
     for e in data.get("examples") or []:
         for key in ("id", "path"):
@@ -309,6 +319,9 @@ def cmd_matrix(data, refs, tier, shas=None):
                     "wolfssl_sha": pinned.get(ref, ref),
                     "flags": " ".join(p.get("flags", "").split()),
                     "cflags": p.get("cflags", ""),
+                    # a source overlay the profile needs patched into the wolfSSL
+                    # tree before configure (setup-wolfssl applies it)
+                    "overlay": p.get("overlay", ""),
                     "deps": " ".join(e.get("deps") or []),
                 }
             )
@@ -335,6 +348,7 @@ def cmd_wolfssl_matrix(data, refs, tier, shas=None):
             "wolfssl_sha": pinned.get(ref, ref),
             "flags": " ".join(data["profiles"][name].get("flags", "").split()),
             "cflags": data["profiles"][name].get("cflags", ""),
+            "overlay": data["profiles"][name].get("overlay", ""),
         }
         for name in profiles
         for ref in refs
@@ -355,6 +369,7 @@ def cmd_wolfssl_matrix(data, refs, tier, shas=None):
                         data["profiles"][e["profile"]].get("flags", "").split()
                     ),
                     "cflags": data["profiles"][e["profile"]].get("cflags", ""),
+                    "overlay": data["profiles"][e["profile"]].get("overlay", ""),
                 }
             )
     print(json.dumps(out))
@@ -393,6 +408,7 @@ def cmd_profiles(data):
             "profile": name,
             "flags": data["profiles"][name].get("flags", "").strip(),
             "cflags": data["profiles"][name].get("cflags", ""),
+            "overlay": data["profiles"][name].get("overlay", ""),
         }
         for name in sorted(used)
     ]
