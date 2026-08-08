@@ -47,11 +47,41 @@
 
 #if defined(WOLFCRYPT_HAVE_ECCSI) && defined(WOLFCRYPT_HAVE_SAKKE)
 
+/* On failure, report and jump to the cleanup label. */
+#define CheckError(msg, label) do { \
+    if (ret != 0) { \
+        printf(msg ": ret %d, line %d\n", ret, __LINE__); \
+        goto label; \
+    } \
+} while (0)
+
+/* Set flag on success */
+#define CheckErrorSetFlag(msg, label, flag) do { \
+    if (ret != 0) { \
+        printf(msg ": ret %d, line %d\n", ret, __LINE__); \
+        goto label; \
+    } \
+    else { \
+        flag = 1; \
+    } \
+} while (0)
+
+
+/* Sizes below are derived from the parameter sets used by this example:
+ * SAKKE 1024-bit (RFC 6509 Appendix A) and ECCSI over NIST P-256.
+ * The buffer sizes are compile-time maximums; the authentication size
+ * actually used is queried at run time with wc_GetSakkeAuthSize(). */
 #define SSV_SZ      16
+/* SAKKE 1024-bit: 1 + 2*128 (uncompressed point) */
 #define AUTH_SZ     257
+/* ECCSI P-256:    32 + 32 + 65  (r || s || PVT) */
 #define ECCSI_SIG_SZ 129
-#define ECCSI_PUB_KEY_SZ  (32 * 2)    /* raw P-256 point:     X || Y */
-#define SAKKE_PUB_KEY_SZ  (128 * 2)   /* raw 1024-bit point:  X || Y */
+/* raw P-256 point:     X || Y */
+#define ECCSI_PUB_KEY_SZ  (32 * 2)
+/* raw 1024-bit point:  X || Y */
+#define SAKKE_PUB_KEY_SZ  (128 * 2)
+
+/* Arbitrary max for simplicity */
 #define MAX_ID_SZ   64
 
 static const byte aliceId[] = "alice@example.com";
@@ -89,7 +119,7 @@ int main(void)
         word32     kmsAuthPublicKeySz;
         byte       kmsSakkePublicKey[SAKKE_PUB_KEY_SZ]; /* KMS SAKKE public key */
         word32     kmsSakkePublicKeySz;
-    } KmsCertficate = {0};
+    } KmsCertificate = {0};
 
     struct {
         char       senderId[MAX_ID_SZ];
@@ -108,9 +138,8 @@ int main(void)
         int        secretSigningKeyInit;
         ecc_point* publicValidationToken;
         ecc_point* receiverSecretKey;
-        byte       sharedSecretValue[SSV_SZ]; /* plaintext SSV (Alices's copy) */
+        byte       sharedSecretValue[SSV_SZ]; /* plaintext SSV (Alice's copy) */
         word16     sharedSecretValueSz;
-        int        verified;
         char*      id;
     } Alice = {0};
 
@@ -123,45 +152,54 @@ int main(void)
         int        secretSigningKeyInit;
         ecc_point* publicValidationToken;
         ecc_point* receiverSecretKey;
-        byte       dirived_sharedSecretValue[SSV_SZ]; /* plaintext SSV (Bob's copy) */
-        word16     dirived_sharedSecretValueSz;
-        int        verified;
+        byte       derived_sharedSecretValue[SSV_SZ]; /* plaintext SSV (Bob's copy) */
+        word16     derived_sharedSecretValueSz;
         char*      id;
     } Bob = {0};
 
     /* --- Setup KMS --- */
     ret = wc_InitSakkeKey(&kms.kmsSakke, NULL, INVALID_DEVID);
-    if (ret != 0) goto exit; else kms.kmsSakkeInit = 1;
+    CheckErrorSetFlag("Could Not Init Sakke Key", exit, kms.kmsSakkeInit);
     ret = wc_InitEccsiKey(&kms.kmsEccsi, NULL, INVALID_DEVID);
-    if (ret != 0) goto exit; else kms.kmsEccsiInit = 1;
+    CheckErrorSetFlag("Could Not Init Eccsi Key", exit, kms.kmsEccsiInit);
     /* --- Setup KMS --- */
 
     /* --- Init Alice --- */
     Alice.id = (char*)aliceId;
     ret = wc_InitEccsiKey(&Alice.publicKeyEccsi, NULL, INVALID_DEVID);
-    if (ret != 0) goto exit; else Alice.publicKeyEccsiInit = 1;
+    CheckErrorSetFlag("Could not init Eccsi Key alice", exit,
+            Alice.publicKeyEccsiInit);
     ret = wc_InitSakkeKey(&Alice.publicKeySakke, NULL, INVALID_DEVID);
-    if (ret != 0) goto exit; else Alice.publicKeySakkeInit = 1;
+    CheckErrorSetFlag("Could not init Sakke Key alice", exit,
+            Alice.publicKeySakkeInit);
     ret = mp_init(&Alice.secretSigningKey);
-    if (ret != 0) goto exit; else Alice.secretSigningKeyInit = 1;
+    CheckErrorSetFlag("Could not init secret signing key alice", exit,
+            Alice.secretSigningKeyInit);
     Alice.publicValidationToken = wc_ecc_new_point();
     Alice.receiverSecretKey     = wc_ecc_new_point();
-    if (Alice.publicValidationToken == NULL || Alice.receiverSecretKey == NULL)
-        {ret = MEMORY_E; goto exit;}
+    if (Alice.publicValidationToken == NULL || Alice.receiverSecretKey == NULL){
+            ret = MEMORY_E;
+            goto exit;
+    }
     /* --- Init Alice --- */
 
     /* --- Init Bob --- */
     Bob.id = (char*)bobId;
     ret = wc_InitEccsiKey(&Bob.publicKeyEccsi, NULL, INVALID_DEVID);
-    if (ret != 0) goto exit; else Bob.publicKeyEccsiInit = 1;
+    CheckErrorSetFlag("Could not init Eccsi Key bob", exit,
+            Bob.publicKeyEccsiInit);
     ret = wc_InitSakkeKey(&Bob.publicKeySakke, NULL, INVALID_DEVID);
-    if (ret != 0) goto exit; else Bob.publicKeySakkeInit = 1;
+    CheckErrorSetFlag("Could not init Sakke Key bob", exit,
+            Bob.publicKeySakkeInit);
     ret = mp_init(&Bob.secretSigningKey);
-    if (ret != 0) goto exit; else Bob.secretSigningKeyInit = 1;
+    CheckErrorSetFlag("Could not init secret signing key bob", exit,
+            Bob.secretSigningKeyInit);
     Bob.publicValidationToken = wc_ecc_new_point();
     Bob.receiverSecretKey     = wc_ecc_new_point();
-    if (Bob.publicValidationToken == NULL || Bob.receiverSecretKey == NULL)
-        {ret = MEMORY_E; goto exit;}
+    if (Bob.publicValidationToken == NULL || Bob.receiverSecretKey == NULL) {
+        ret = MEMORY_E;
+        goto exit;
+    }
     /* --- Init Bob --- */
 
 
@@ -201,102 +239,89 @@ int main(void)
     /* --- Enroll Alice with KMS to get their keys --- */
     {
         /* - Get PublicKeys from KMS (Simulate KMS sending pubkeys only) - */
-        KmsCertficate.kmsAuthPublicKeySz = ECCSI_PUB_KEY_SZ;
+        KmsCertificate.kmsAuthPublicKeySz = ECCSI_PUB_KEY_SZ;
         ret = wc_ExportEccsiPublicKey(&kms.kmsEccsi,
-                KmsCertficate.kmsAuthPublicKey,
-                &KmsCertficate.kmsAuthPublicKeySz, 1);
+                KmsCertificate.kmsAuthPublicKey,
+                &KmsCertificate.kmsAuthPublicKeySz, 1);
+        CheckError("Could not export pub eccsi key from KMS", exit);
 
-        if (ret != 0) {
-            printf("could not export pub eccsi key from KMS");
-            goto exit;
-        }
-
-        KmsCertficate.kmsSakkePublicKeySz = SAKKE_PUB_KEY_SZ;
+        KmsCertificate.kmsSakkePublicKeySz = SAKKE_PUB_KEY_SZ;
         ret = wc_ExportSakkePublicKey(&kms.kmsSakke,
-                KmsCertficate.kmsSakkePublicKey,
-                &KmsCertficate.kmsSakkePublicKeySz, 1);
-        if (ret != 0) {
-            printf("could not export pub sakke key from KMS");
-            goto exit;
-        }
+                KmsCertificate.kmsSakkePublicKey,
+                &KmsCertificate.kmsSakkePublicKeySz, 1);
+        CheckError("Could not export pub Sakke key from KMS", exit);
         /* - Get PublicKeys from KMS (Simulate KMS sending pubkeys only) - */
 
         /* - Save public key from KMS - */
         ret = wc_ImportEccsiPublicKey(&Alice.publicKeyEccsi,
-                    KmsCertficate.kmsAuthPublicKey,
-                    KmsCertficate.kmsAuthPublicKeySz, 1);
+                    KmsCertificate.kmsAuthPublicKey,
+                    KmsCertificate.kmsAuthPublicKeySz, 1);
         if (ret == 0)
             ret = wc_ImportSakkePublicKey(&Alice.publicKeySakke,
-                                          KmsCertficate.kmsSakkePublicKey,
-                                          KmsCertficate.kmsSakkePublicKeySz, 1);
-        if (ret != 0) {printf("Unable to transfer kms public keys"); goto exit;}
+                                          KmsCertificate.kmsSakkePublicKey,
+                                          KmsCertificate.kmsSakkePublicKeySz, 1);
+        CheckError("Unable to transfer kms public keys", exit);
         /* - Save public key from KMS - */
 
         /* - Get Signing pair from KMS - */
         ret = wc_MakeEccsiPair(&kms.kmsEccsi, &rng, WC_HASH_TYPE_SHA256,
                     (byte*)Alice.id, sizeof(aliceId), &Alice.secretSigningKey,
                     Alice.publicValidationToken);
-        if (ret != 0) {printf("Unable to make signing pairs"); goto exit;}
-        /* - Get Sining pair from KMS - */
+        CheckError("Unable to make signing pairs", exit);
+        /* - Get Signing pair from KMS - */
 
-        /* - Get Issue Recivier Key - */
+        /* - Get Issue Receiver Key - */
         ret = wc_MakeSakkeRsk(&kms.kmsSakke, (byte*)Alice.id,
                 sizeof(aliceId), Alice.receiverSecretKey);
-        if (ret != 0) {printf("Unable to make receiver secret key"); goto exit;}
-        /* - Get Issue Recivier Key - */
+        CheckError("Unable to make receiver secret key", exit);
+        /* - Get Issue Receiver Key - */
     }
     /* --- Enroll Alice with KMS to get their keys --- */
 
     /* --- Reset Kms Cert for Bob --- */
-    memset(&KmsCertficate, 0, sizeof(KmsCertficate));
+    memset(&KmsCertificate, 0, sizeof(KmsCertificate));
     /* --- Reset Kms Cert for Bob --- */
 
     /* --- Enroll Bob with KMS to get their keys --- */
     {
         /* - Get PublicKeys from KMS (Simulate KMS sending pubkeys only) - */
-        KmsCertficate.kmsAuthPublicKeySz = ECCSI_PUB_KEY_SZ;
+        KmsCertificate.kmsAuthPublicKeySz = ECCSI_PUB_KEY_SZ;
         ret = wc_ExportEccsiPublicKey(&kms.kmsEccsi,
-                KmsCertficate.kmsAuthPublicKey,
-                &KmsCertficate.kmsAuthPublicKeySz, 1);
+                KmsCertificate.kmsAuthPublicKey,
+                &KmsCertificate.kmsAuthPublicKeySz, 1);
 
-        if (ret != 0) {
-            printf("could not export pub eccsi key from KMS");
-            goto exit;
-        }
+        CheckError("Could not export pub eccsi key from KMS", exit);
 
-        KmsCertficate.kmsSakkePublicKeySz = SAKKE_PUB_KEY_SZ;
+        KmsCertificate.kmsSakkePublicKeySz = SAKKE_PUB_KEY_SZ;
         ret = wc_ExportSakkePublicKey(&kms.kmsSakke,
-                KmsCertficate.kmsSakkePublicKey,
-                &KmsCertficate.kmsSakkePublicKeySz, 1);
-        if (ret != 0) {
-            printf("could not export pub sakke key from KMS");
-            goto exit;
-        }
+                KmsCertificate.kmsSakkePublicKey,
+                &KmsCertificate.kmsSakkePublicKeySz, 1);
+        CheckError("Could not export pub sakke key from KMS", exit);
         /* - Get PublicKeys from KMS (Simulate KMS sending pubkeys only) - */
 
         /* - Save public key from KMS - */
         ret = wc_ImportEccsiPublicKey(&Bob.publicKeyEccsi,
-                    KmsCertficate.kmsAuthPublicKey,
-                    KmsCertficate.kmsAuthPublicKeySz, 1);
+                    KmsCertificate.kmsAuthPublicKey,
+                    KmsCertificate.kmsAuthPublicKeySz, 1);
         if (ret == 0)
             ret = wc_ImportSakkePublicKey(&Bob.publicKeySakke,
-                                          KmsCertficate.kmsSakkePublicKey,
-                                          KmsCertficate.kmsSakkePublicKeySz, 1);
-        if (ret != 0) {printf("Unable to transfer kms public keys"); goto exit;}
+                                          KmsCertificate.kmsSakkePublicKey,
+                                          KmsCertificate.kmsSakkePublicKeySz, 1);
+        CheckError("Unable to transfer kms public keys", exit);
         /* - Save public key from KMS - */
 
         /* - Get Signing pair from KMS - */
         ret = wc_MakeEccsiPair(&kms.kmsEccsi, &rng, WC_HASH_TYPE_SHA256,
                     (byte*)Bob.id, sizeof(bobId), &Bob.secretSigningKey,
                     Bob.publicValidationToken);
-        if (ret != 0) {printf("Unable to make signing pairs"); goto exit;}
-        /* - Get Sining pair from KMS - */
+        CheckError("Unable to make signing pairs", exit);
+        /* - Get Signing pair from KMS - */
 
-        /* - Get Issue Recivier Key - */
+        /* - Get Issue Receiver Key - */
         ret = wc_MakeSakkeRsk(&kms.kmsSakke, (byte*)Bob.id,
                 sizeof(bobId), Bob.receiverSecretKey);
-        if (ret != 0) {printf("Unable to make receiver secret key"); goto exit;}
-        /* - Get Issue Recivier Key - */
+        CheckError("Unable to make receiver secret key", exit);
+        /* - Get Issue Receiver Key - */
     }
     /* --- Enroll Bob with KMS to get their keys --- */
 
@@ -309,7 +334,7 @@ int main(void)
         /* - We are handwaving that alice know Bobs Id - */
         ret = wc_SetSakkeIdentity(&Alice.publicKeySakke, (byte*)Bob.id,
                 sizeof(bobId));
-        if (ret != 0) {printf("Could not set Sakkee id"); goto exit;}
+        CheckError("Could not set Sakke id", exit);
         /* - We are handwaving that alice know Bobs Id - */
 
         /* - Create SSV - */
@@ -317,17 +342,18 @@ int main(void)
         Alice.sharedSecretValueSz = SSV_SZ;
         ret = wc_GenerateSakkeSSV(&Alice.publicKeySakke, &rng,
                 Alice.sharedSecretValue, &Alice.sharedSecretValueSz);
-        if (ret != 0) {printf("Could not generate SSV"); goto exit;}
+        CheckError("Could not generate SSV", exit);
         /* - Create SSV - */
 
         /* - Encapsulate SSV in place - */
         memcpy(Message.payload, Alice.sharedSecretValue,
                 Alice.sharedSecretValueSz);
-        Message.authSz = AUTH_SZ;
+        ret = wc_GetSakkeAuthSize(&Alice.publicKeySakke, &Message.authSz);
+        CheckError("Could not get key sz", exit);
         ret = wc_MakeSakkeEncapsulatedSSV(&Alice.publicKeySakke,
                 WC_HASH_TYPE_SHA256, Message.payload, Alice.sharedSecretValueSz,
                 Message.payload + Alice.sharedSecretValueSz, &Message.authSz);
-        if (ret != 0) {printf("Could not encapsulate SSV"); goto exit;}
+        CheckError("Could not encapsulate SSV", exit);
         /* - Encapsulate SSV in place - */
 
         /* - Hash Alices Id - */
@@ -354,7 +380,7 @@ int main(void)
         }
         /* - Sign the Eccsi Hash - */
 
-        if (ret != 0) {printf("Unable to sign payload"); goto exit;}
+        CheckError("Unable to sign payload", exit);
     }
     /* - Message is ready to send - */
     /* --- Alice Creates Message --- */
@@ -369,46 +395,49 @@ int main(void)
         int        verified = 0;
 
         /* Bob signs/derives over the same SSV length Alice used. */
-        Bob.dirived_sharedSecretValueSz = SSV_SZ;
+        Bob.derived_sharedSecretValueSz = SSV_SZ;
 
         senderPvt = wc_ecc_new_point();
-        if (senderPvt == NULL) {ret = MEMORY_E; goto exit;}
+        if (senderPvt == NULL) {
+            ret = MEMORY_E;
+            goto exit;
+        }
         /* - Get Sender Public Validation Token - */
         ret = wc_DecodeEccsiPvtFromSig(&Bob.publicKeyEccsi,
                 Message.signature, Message.signatureSz, senderPvt);
-        if (ret != 0) {printf("Could not Decode Pvt."); goto BobFail;}
+        CheckError("Could not Decode Pvt.", BobFail);
         /* - Get Sender Public Validation Token - */
 
         /* - Verify the Message - */
         ret = wc_HashEccsiId(&Bob.publicKeyEccsi, WC_HASH_TYPE_SHA256,
                 (byte*)Message.senderId, sizeof(aliceId), senderPvt, hashId,
                 &hashIdSz);
-        if (ret != 0) {printf("Could not Hash Sender Id."); goto BobFail;}
+        CheckError("Could not Hash Sender Id.", BobFail);
         ret = wc_SetEccsiHash(&Bob.publicKeyEccsi, hashId, hashIdSz);
-        if (ret != 0) {printf("Could not Set Hash."); goto BobFail;}
+        CheckError("Could not Set Hash.", BobFail);
         ret = wc_VerifyEccsiHash(&Bob.publicKeyEccsi, WC_HASH_TYPE_SHA256,
                 Message.payload,
-                Bob.dirived_sharedSecretValueSz + Message.authSz,
+                Bob.derived_sharedSecretValueSz + Message.authSz,
                 Message.signature, Message.signatureSz, &verified);
         /* A bad signature is reported through "verified", not through ret. */
         if (ret == 0 && !verified) ret = SIG_VERIFY_E;
-        if (ret != 0) {printf("Could not Verify Message."); goto BobFail;}
+        CheckError("Could not Verify Message.", BobFail);
         /* - Verify the Message - */
 
         /* - Get The Shared secret value out of the Message - */
         ret = wc_SetSakkeIdentity(&Bob.publicKeySakke, (const byte*)Bob.id,
                 sizeof(bobId));
-        if (ret != 0) {printf("Could not Sakke Id."); goto BobFail;}
+        CheckError("Could not Sakke Id.", BobFail);
         ret = wc_SetSakkeRsk(&Bob.publicKeySakke, Bob.receiverSecretKey,
                 NULL, 0);
-        if (ret != 0) {printf("Could Set Sakke Rsk."); goto BobFail;}
-        memcpy(Bob.dirived_sharedSecretValue, Message.payload,
-                Bob.dirived_sharedSecretValueSz);
+        CheckError("Could Set Sakke Rsk.", BobFail);
+        memcpy(Bob.derived_sharedSecretValue, Message.payload,
+                Bob.derived_sharedSecretValueSz);
         ret = wc_DeriveSakkeSSV(&Bob.publicKeySakke, WC_HASH_TYPE_SHA256,
-                Bob.dirived_sharedSecretValue, Bob.dirived_sharedSecretValueSz,
-                Message.payload + Bob.dirived_sharedSecretValueSz,
+                Bob.derived_sharedSecretValue, Bob.derived_sharedSecretValueSz,
+                Message.payload + Bob.derived_sharedSecretValueSz,
                 Message.authSz);
-        if (ret != 0) {printf("Could not derive Sakke SSV."); goto BobFail;}
+        CheckError("Could not derive Sakke SSV.", BobFail);
         /* - Get The Shared secret value out of the Message - */
 
         /* - Error - */
@@ -421,7 +450,7 @@ BobFail:
     }
 
 
-    if (memcmp(Alice.sharedSecretValue, Bob.dirived_sharedSecretValue,
+    if (memcmp(Alice.sharedSecretValue, Bob.derived_sharedSecretValue,
                 SSV_SZ) != 0) {
         printf("SSVs differ!\n");
         ret = -1;
@@ -437,6 +466,8 @@ exit:
 
     if (Bob.receiverSecretKey != NULL)
         wc_ecc_forcezero_point(Bob.receiverSecretKey);
+    wc_ForceZero(Bob.derived_sharedSecretValue,
+            sizeof(Bob.derived_sharedSecretValue));
     if (Bob.publicValidationToken != NULL)
         wc_ecc_del_point(Bob.publicValidationToken);
     if (Bob.receiverSecretKey != NULL)
@@ -450,6 +481,8 @@ exit:
 
     if (Alice.receiverSecretKey != NULL)
         wc_ecc_forcezero_point(Alice.receiverSecretKey);
+    wc_ForceZero(Alice.sharedSecretValue,
+            sizeof(Alice.sharedSecretValue));
     if (Alice.publicValidationToken != NULL)
         wc_ecc_del_point(Alice.publicValidationToken);
     if (Alice.receiverSecretKey != NULL)

@@ -99,7 +99,7 @@ int main(int argc, char* argv[])
     WC_RNG           rng;
     int              rngInit = 0;
     byte*            sig = NULL;
-    byte             pub[64];
+    byte             pub[WC_SLHDSA_MAX_PUB_LEN];
     word32           pubLen = (word32)sizeof(pub);
     word32           sigLen = 0;
     int              sigSz;
@@ -195,19 +195,25 @@ int main(int argc, char* argv[])
     {
         SlhDsaKey pubKey;
         ret = wc_SlhDsaKey_Init(&pubKey, param, NULL, INVALID_DEVID);
-        if (ret != 0) goto exit;
+        if (ret != 0)
+            goto exit;
         /* - only have pub key - */
-        wc_SlhDsaKey_ImportPublic(&pubKey, pub, pubLen);
+        ret = wc_SlhDsaKey_ImportPublic(&pubKey, pub, pubLen);
+        if (ret != 0) {
+            printf("error: wc_SlhDsaKey_ImportPublic returned %d\n", ret);
+            wc_SlhDsaKey_Free(&pubKey);
+            goto exit;
+        }
         ret = wc_SlhDsaKey_Verify(&pubKey, NULL, 0, (const byte*)msg,
                                   (word32)strlen(msg), sig, sigLen);
         if (ret != 0) {
             printf("error: wc_SlhDsaKey_Verify returned %d\n", ret);
-        wc_SlhDsaKey_Free(&pubKey);
+            wc_SlhDsaKey_Free(&pubKey);
             goto exit;
         }
         printf("info: verify message good\n");
 
-        /* A modified message must fail verification. */
+        /* A modified signature must fail verification. */
         sig[0] ^= 0x80;
         ret = wc_SlhDsaKey_Verify(&pubKey, NULL, 0, (const byte*)msg,
                                   (word32)strlen(msg), sig, sigLen);
@@ -220,6 +226,8 @@ int main(int argc, char* argv[])
 
         wc_SlhDsaKey_Free(&pubKey);
     }
+    /* --- Verify with public key --- */
+
     printf("info: corrupted signature rejected as expected\n");
 
     ret = 0;

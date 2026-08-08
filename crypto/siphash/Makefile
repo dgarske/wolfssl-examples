@@ -3,10 +3,12 @@ WOLFSSL_INSTALL_DIR=/usr/local
 CFLAGS=-Wall -I$(WOLFSSL_INSTALL_DIR)/include
 LIBS=-L$(WOLFSSL_INSTALL_DIR)/lib -lwolfssl -lm
 
+.PHONY: all clean check
+
+all: siphash-mac
+
 siphash-mac: siphash-mac.o
 	$(CC) -o $@ $^ $(CFLAGS) $(LIBS)
-
-.PHONY: clean check
 
 clean:
 	rm -f *.o siphash-mac

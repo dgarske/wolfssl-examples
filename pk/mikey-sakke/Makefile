@@ -3,10 +3,12 @@ WOLFSSL_INSTALL_DIR=/usr/local
 CFLAGS=-Wall -I$(WOLFSSL_INSTALL_DIR)/include
 LIBS=-L$(WOLFSSL_INSTALL_DIR)/lib -lwolfssl -lm
 
+.PHONY: all clean check
+
+all: mikey-sakke
+
 mikey-sakke: mikey-sakke.o
 	$(CC) -o $@ $^ $(CFLAGS) $(LIBS)
-
-.PHONY: clean check
 
 clean:
 	rm -f *.o mikey-sakke

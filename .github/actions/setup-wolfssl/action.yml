@@ -13,6 +13,16 @@ inputs:
     description: 'extra CFLAGS for this profile'
     required: false
     default: ''
+  overlay:
+    description: >-
+      source overlay to install into the wolfSSL tree before configure, as
+      "name@branchOrTag" or if you want just the latest on master of a repo
+      just set "name" (currently only supports "wolfsm"). Some algorithm
+      families ship outside the wolfSSL repo and cannot be reached by any
+      configure flag alone, so the patch has to happen here -- this is the
+      only step that holds the wolfSSL source tree.
+    required: false
+    default: ''
 
 outputs:
   sha256:
@@ -50,7 +60,11 @@ runs:
       id: cfg
       shell: bash
       run: |
-        printf '%s|%s' '${{ inputs.flags }}' '${{ inputs.cflags }}' \
+        # overlay is in the hash: an SM build and a plain build of the same ref
+        # and flags are different libraries, and sharing a key would serve one
+        # for the other.
+        printf '%s|%s|%s' '${{ inputs.flags }}' '${{ inputs.cflags }}' \
+          '${{ inputs.overlay }}' \
           | sha256sum | cut -c1-16 | sed 's/^/hash=/' >> "$GITHUB_OUTPUT"
 
     # Key on the image, not runner.os: a binary built against a newer glibc must
@@ -81,6 +95,32 @@ runs:
         git init -q
         git fetch -q --depth 1 https://github.com/wolfSSL/wolfssl.git ${{ steps.resolve.outputs.sha }}
         git checkout -q FETCH_HEAD
+
+        # Before autogen, not after: install.sh drops sources and m4 into the
+        # tree, and configure only grows --enable-sm2/sm3/sm4-* once they are
+        # there.
+        overlay='${{ inputs.overlay }}'
+        if [ -n "$overlay" ]; then
+          repoName="${overlay%%@*}"
+          if [ "$overlay" = "$repoName" ]; then
+            # default to latest on master
+            branchOrTag="HEAD"
+          else
+            branchOrTag="${overlay#*@}"
+          fi
+          case "$repoName" in
+            wolfsm) url=https://github.com/wolfSSL/wolfsm.git ;;
+            # add more cases here as they come up!
+            *) echo "unknown overlay '$repoName'"; exit 1 ;;
+          esac
+          rm -rf "/tmp/$repoName" && mkdir -p "/tmp/$repoName"
+          git -C "/tmp/$repoName" init -q
+          git -C "/tmp/$repoName" fetch -q --depth 1 "$url" "$branchOrTag"
+          git -C "/tmp/$repoName" checkout -q FETCH_HEAD
+          echo "installing $repoName@$branchOrTag into the wolfSSL tree"
+          ( cd "/tmp/$repoName" && ./install.sh /tmp/wolfssl )
+        fi
+
         ./autogen.sh
         # We need the library, not wolfSSL's own examples and test suite. Those
         # also fail to build under some profiles (the `tls` profile died on

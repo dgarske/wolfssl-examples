@@ -445,3 +445,20 @@ pq/ml_kem/ml_kem
 
 # openssl ocsp -index writes this beside the index when it is missing
 ocsp/stapling/responder-certs/index.txt.attr
+
+# algorithm example executables
+crypto/kdf/hkdf
+crypto/kdf/pbkdf2
+crypto/kdf/scrypt-kdf
+crypto/siphash/siphash-mac
+crypto/sm/sm2-ecdh
+crypto/sm/sm2-sign-verify
+crypto/sm/sm3-hash
+crypto/sm/sm4-gcm-encrypt
+hash/blake2/blake2-keyed-mac
+hash/blake2/blake2b-hash
+hash/blake2/blake2s-hash
+pk/hpke/hpke_context
+pk/mikey-sakke/mikey-sakke
+pk/srp/srp_sha256
+pq/slh_dsa/slh_dsa_test

@@ -71,6 +71,16 @@ profiles:
     # and WC_RNG_SEED_CB" without it.
     cflags: "-DWOLFSSL_AES_CTS -DHAVE_AES_ECB -DWC_RNG_SEED_CB"
 
+  sm:
+    # crypto/sm/README: SM2/SM3/SM4 ship in the wolfSSL/wolfsm overlay, not in
+    # wolfSSL itself, so these --enable flags do not exist until install.sh has
+    # run against the source tree. setup-wolfssl applies the overlay before
+    # autogen; nothing in an example's own build can reach that far back.
+    # Bare name means latest on wolfsm's master: the repo publishes no tags and
+    # has no other branch, so there is nothing to pin to short of a raw commit.
+    overlay: wolfsm
+    flags: "--enable-sm2 --enable-sm3 --enable-sm4-gcm --enable-static --enable-shared"
+
   certgen:
     flags: >-
       --enable-certgen --enable-certreq --enable-certext --enable-keygen
@@ -435,11 +445,8 @@ examples:
 
   - id: crypto-sm
     path: crypto/sm
-    mode: skip
-    reason: >-
-      SM2/SM3/SM4 live in the separate wolfSSL/wolfsm overlay, which must be
-      installed into the wolfSSL source tree before configure. No cached
-      profile can express that patch step yet.
+    profile: sm
+    mode: check
 
   - id: signature
     path: signature

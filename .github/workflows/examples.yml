@@ -106,6 +106,7 @@ jobs:
           ref: ${{ matrix.wolfssl_sha }}
           flags: ${{ matrix.flags }}
           cflags: ${{ matrix.cflags }}
+          overlay: ${{ matrix.overlay }}
 
   # One job per example, so a red tile names the example that broke.
   examples:
@@ -138,6 +139,7 @@ jobs:
           ref: ${{ matrix.wolfssl_sha }}
           flags: ${{ matrix.flags }}
           cflags: ${{ matrix.cflags }}
+          overlay: ${{ matrix.overlay }}
 
       # Probe the exact netns invocation: --map-root-user is the part that fails
       - name: Enable unprivileged user namespaces
