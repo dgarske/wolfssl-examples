@@ -1123,14 +1123,15 @@ examples:
       - script: [./softhsm2-init.sh, pkcs11_test]
         expect: "All PKCS#11 examples passed"
         timeout: 300
-        # TODO: drop this expect_fail when wolfSSL/wolfssl#10954 merges into the
-        # refs under test -- that PR fixes it (keygen destroys the HSM public
-        # key, so verify must use the exported point) and pkcs11_test was proven
-        # green against the PR ref. gen_ec_keys_label() then wc_ecc_verify_hash()
-        # on the PKCS#11 public key returns WC_HW_E (-248); signing and the
-        # no-label path pass. Not reproducible locally -- brew SoftHSM 2.7 reports
-        # PKCS#11 3.2 but exports no C_GetInterface, which wolfSSL rejects first.
+        # gen_ec_keys_label() then wc_ecc_verify_hash() on the PKCS#11 public key
+        # returns WC_HW_E (-248); signing and the no-label path pass. Fixed on
+        # master by wolfSSL/wolfssl#10954 (keygen destroys the HSM public key, so
+        # verify must use the exported point), still in the latest stable tag;
+        # drop expect_fail + fixed_on once a stable tag has it. Not reproducible
+        # locally -- brew SoftHSM 2.7 reports PKCS#11 3.2 but exports no
+        # C_GetInterface, which wolfSSL rejects first.
         expect_fail: "wc_ecc_verify_hash on a label-generated PKCS#11 EC key returns WC_HW_E (-248)"
+        fixed_on: [master]
 
   # ------------------------------------------------- host: separate profiles
   - id: pk-rsa
@@ -1496,6 +1497,11 @@ examples:
     path: rtl8735b/tls
     mode: skip
     reason: "RealTek AmebaPro2 SDK + licensed ASDK 10.3.0 toolchain"
+
+  - id: ti-c2000-f28p55x
+    path: embedded/ti-c2000-f28p55x
+    mode: skip
+    reason: "TI LAUNCHXL-F28P55X bare metal; licensed C2000 CGT (cl2000) compiler plus C2000Ware, and the KAT output only comes back over the board's XDS110 JTAG/CIO link"
 
   - id: renesas-rh850
     path: Renesas/cs+/RH850/rsapss_sign_verify
