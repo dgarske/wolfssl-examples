@@ -570,15 +570,27 @@ extern long my_time(long* t);
 /* ------------------------------------------------------------------------- */
 /* RNG - real SHA-256 Hash-DRBG seeded by a DEV-ONLY test seed                */
 /* ------------------------------------------------------------------------- */
-/* The F28P550SJ has no hardware TRNG, so there is no real entropy source.
- * WOLFSSL_GENSEED_FORTEST makes random.c supply a built-in wc_GenerateSeed
- * (an incrementing test value) that feeds the standard SHA-256 Hash-DRBG.
- * This exercises the real DRBG code path (what a production build with a TRNG
- * would use) and lets random_test pass - but the seed is NOT random, so this
- * is DEV/TEST ONLY and MUST NOT be shipped.  Replace wc_GenerateSeed with a
- * real TRNG before any production use. */
+#ifdef WOLF_ENTROPY
+/* Real entropy: the on-chip oscillator-jitter source.  The F28P550SJ has no
+ * TRNG, but it does have two independent RC oscillators and a crystal-derived
+ * PLL, and a Dual-Clock Comparator that can count one against another.  The
+ * LSB of that count is the noise bit; it is oversampled well past its measured
+ * min-entropy, health-tested per SP800-90B 4.4, SHA-256 conditioned, and fed
+ * to the same SHA-256 Hash-DRBG.  See IDE/C2000/README.md in the wolfSSL tree
+ * for the on-hardware characterization. */
+#undef  WOLFSSL_C2000_ENTROPY
+#define WOLFSSL_C2000_ENTROPY
+#else
+/* The F28P550SJ has no hardware TRNG, so without ENTROPY=1 there is no real
+ * entropy source.  WOLFSSL_GENSEED_FORTEST makes random.c supply a built-in
+ * wc_GenerateSeed (an incrementing test value) that feeds the standard SHA-256
+ * Hash-DRBG.  This exercises the real DRBG code path (what a production build
+ * with a TRNG would use) and lets random_test pass - but the seed is NOT
+ * random, so this is DEV/TEST ONLY and MUST NOT be shipped.  Build with
+ * ENTROPY=1 for the real source. */
 #undef  WOLFSSL_GENSEED_FORTEST
 #define WOLFSSL_GENSEED_FORTEST
+#endif
 
 /* Run every self-test to completion and report each, so macro_test (a 16-bit
  * safe-math self-test that currently fails on C28x) does not abort the suite

@@ -58,6 +58,8 @@ Each is `make <NAME>=1` (default 0 unless noted), additive on top of the default
 | `X25519=1` | Curve25519 (X25519) + Ed25519 |
 | `HKDF=1` | HMAC + HKDF (RFC 2104 / RFC 5869) |
 | `CHACHA=1` | ChaCha20-Poly1305 AEAD (RFC 8439) |
+| `ENTROPY=1` | Real oscillator-jitter entropy source (DCC/INTOSC vs PLL) in place of the dev-only test seed. See "RNG and entropy" below |
+| `ENTROPY_PROBE=1` | Raw entropy characterization image: dumps unconditioned samples over SCI for host analysis, runs no crypto |
 | `RSA=1` | RSA-2048 verify (SP math, 2048-only, verify/public-only) |
 | `SIGN=1` | Full ML-DSA-87 keygen+sign+verify demo (dedicated linker script, 32 KW heap, no test/bench harness) |
 | `BENCH=1` | Run only `benchmark` instead of `wolfcrypt_test` (they need separate images on this RAM-limited part) |
@@ -113,19 +115,43 @@ Measured at 150 MHz (`make HWAES=1 BENCH=1`, which prints paired `SW`/`HW` rows)
 
 | Operation | Software | AESA | Speedup |
 |---|---|---|---|
-| AES-128-ECB encrypt | 471 KiB/s | 2.37 MiB/s | 5.2x |
-| AES-256-ECB encrypt | 377 KiB/s | 2.32 MiB/s | 6.3x |
-| AES-128-CBC encrypt | 405 KiB/s | 2.36 MiB/s | 6.0x |
-| AES-128-CBC decrypt | 388 KiB/s | 2.34 MiB/s | 6.2x |
-| AES-256-CBC encrypt | 333 KiB/s | 2.31 MiB/s | 7.1x |
-| AES-256-CBC decrypt | 322 KiB/s | 2.29 MiB/s | 7.3x |
+| AES-128-ECB encrypt | 471 KiB/s | 2.39 MiB/s | 5.2x |
+| AES-256-ECB encrypt | 377 KiB/s | 2.34 MiB/s | 6.3x |
+| AES-128-CBC encrypt | 405 KiB/s | 2.37 MiB/s | 6.0x |
+| AES-128-CBC decrypt | 388 KiB/s | 2.36 MiB/s | 6.2x |
+| AES-256-CBC encrypt | 333 KiB/s | 2.32 MiB/s | 7.1x |
+| AES-256-CBC decrypt | 322 KiB/s | 2.31 MiB/s | 7.3x |
 | AES-128-CTR | 408 KiB/s | 1.45 MiB/s | 3.6x |
-| AES-256-CTR | 335 KiB/s | 1.44 MiB/s | 4.4x |
+| AES-256-CTR | 335 KiB/s | 1.45 MiB/s | 4.4x |
 
 AES-GCM barely moves (~32 to ~34 KiB/s): only its internal ECB calls reach the accelerator and the `GCM_SMALL` byte-wise GHASH dominates. Using the block's own GCM mode is future work. CFB, CCM, CMAC and everything else stay in software -- the callback returns `CRYPTOCB_UNAVAILABLE` and wolfCrypt falls through transparently.
 
 Two hardware quirks are documented in `IDE/C2000/README.md` in the wolfSSL tree and worth knowing before touching this code: driverlib expects little-endian octets within each 32-bit word (not a raw cast of a `byte*`), and the block's CTR counter increment does **not** match wolfCrypt's big-endian 128-bit `IncrementAesCounter()` once an increment carries across an octet boundary -- so the port drives the accelerator in ECB mode and keeps the counter in software. Both quirks produce a *correct first block*, which is why the multi-block cases in the harness matter.
 
-## RNG caveat
+## RNG and entropy
 
-The F28P550SJ has **no hardware TRNG**. This build uses `WOLFSSL_GENSEED_FORTEST` (random.c's built-in incrementing test seed feeding the real SHA-256 Hash-DRBG): it exercises the real DRBG path but is **development-only, not cryptographically secure**. For production, wire a real entropy source into `wc_GenerateSeed()`.
+The F28P550SJ has **no hardware TRNG**. It does have three independent oscillators -- INTOSC1 and INTOSC2 (on-chip ~10 MHz RC) and the external crystal behind SYSCLK/PLLRAWCLK -- and two Dual-Clock Comparators that can count one against another. `ENTROPY=1` uses that: a DCC counts PLLRAWCLK edges inside a window of INTOSC cycles, and the LSB of the count is one noise bit carrying the relative phase drift of two physically distinct oscillators. The raw stream is oversampled well past its measured min-entropy, health-tested per SP800-90B 4.4, SHA-256 conditioned, and fed to the SP800-90A Hash-DRBG.
+
+Measured on this board with `ENTROPY_PROBE=1` (262144 raw bits per source, LSB extraction, host analysis):
+
+| Source | Hmin/bit | bias | max \|acf\| | chi-square p |
+|---|---|---|---|---|
+| INTOSC1 window / PLL counted (DCC1) | **0.932** | -0.0000 | 0.005 | 0.623 |
+| INTOSC2 window / PLL counted (DCC0) | 0.843 | -0.0027 | 0.005 | 0.000 |
+| ADC LSB, floating input | 0.834 | -0.0086 | 0.073 | 0.000 |
+
+Only INTOSC1 is credited toward the entropy budget; INTOSC2 is hashed in as defence-in-depth but fails a chi-square uniformity check decisively, and the ADC source is off by default because it also fails chi-square and depends on a spare analog pin being left floating. The port assumes 0.5 bits per raw bit and oversamples 2x on top, about a 4x cushion. This is a most-common-value estimate with bias and correlation screening, **not** a full SP800-90B non-IID assessment. Read 0.932 against the estimator's ceiling rather than 1.0: at this sample count a synthetic uniform stream estimates to 0.930, so the credited source is statistically indistinguishable from uniform. These are single-run measurements of a physical source and move slightly between runs (an earlier capture gave 0.924 / 0.775 / 0.865), but the pass/fail conclusions have been identical in every run.
+
+Only the DCC measurement itself is C2000 code. The SP800-90B startup and continuous health tests, the entropy budget, the SHA-256 conditioner and the latched fail-closed state come from wolfSSL's generic `wc_NoiseSrc_*` layer in `wolfcrypt/src/random.c`, which `WOLFSSL_C2000_ENTROPY` configures. See `IDE/C2000/README.md` in the wolfSSL tree.
+
+`ENTROPY_PROBE=1` builds the measurement image itself: it dumps unconditioned samples over the SCI console for host analysis, and runs no crypto. `tools/entropy_analyze.py` (numpy only) consumes that capture and reproduces the table above:
+
+```
+make CGT_ROOT=<cgt> ENTROPY_PROBE=1
+# flash, run, capture the console to probe.log, then:
+python3 tools/entropy_analyze.py probe.log
+```
+
+Min-entropy is the SP800-90B 6.3.1 most-common-value estimate over the 8-bit octet alphabet at the 99% upper confidence bound, divided by 8 to express it per bit. The octet alphabet is used rather than the bit alphabet because it also catches structure across adjacent bits that a per-bit estimate cannot see. Run `python3 tools/entropy_analyze.py --selftest` to check the estimators against synthetic streams with known properties; that also calibrates the ceiling, since at this sample count a genuinely uniform stream estimates to about 0.93 rather than 1.0 -- so the credited source's 0.92 is at the estimator's practical maximum, not 8% short of ideal.
+
+Without `ENTROPY=1` the build falls back to `WOLFSSL_GENSEED_FORTEST` (random.c's incrementing test seed feeding the real Hash-DRBG) -- it exercises the DRBG path but is **development-only and not cryptographically secure**.

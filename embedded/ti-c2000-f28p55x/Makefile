@@ -277,6 +277,25 @@ ifeq ($(MEMPROF),1)
   CFLAGS += --define=WOLF_MEM_PROFILE
 endif
 
+# ENTROPY=1 replaces the dev-only WOLFSSL_GENSEED_FORTEST counter with the real
+# oscillator-jitter entropy source (DCC/INTOSC vs PLL, SHA-256 conditioned,
+# SP800-90B health tests) feeding the SP800-90A Hash-DRBG.
+ENTROPY ?= 0
+ifeq ($(ENTROPY),1)
+  CFLAGS  += --define=WOLF_ENTROPY
+  WC_SRCS += $(WOLFROOT)/wolfcrypt/src/port/ti/ti-c2000-entropy.c
+endif
+
+# ENTROPY_PROBE=1 builds the raw entropy-source characterization image: it
+# dumps unconditioned DCC oscillator-jitter and ADC samples over SCI so a host
+# can estimate min-entropy.  Measurement only - no crypto runs.
+ENTROPY_PROBE ?= 0
+ifeq ($(ENTROPY_PROBE),1)
+  CFLAGS       += --define=WOLF_ENTROPY_PROBE --define=NO_CRYPT_TEST \
+                  --define=NO_CRYPT_BENCHMARK
+  HARNESS_EXTRA += $(CURDIR)/Source/entropy_probe.c
+endif
+
 # Append the shared AES core once, after every toggle has had its say.
 ifeq ($(NEED_AES_CORE),1)
   WC_SRCS += \
@@ -284,7 +303,7 @@ ifeq ($(NEED_AES_CORE),1)
     $(WOLFROOT)/wolfcrypt/src/wc_encrypt.c
 endif
 
-ALL_SRCS := $(WC_SRCS) $(HARNESS_SRCS) $(BSP_SRCS) $(ASM_SRCS)
+ALL_SRCS := $(WC_SRCS) $(HARNESS_SRCS) $(HARNESS_EXTRA) $(BSP_SRCS) $(ASM_SRCS)
 
 .PHONY: all clean
 

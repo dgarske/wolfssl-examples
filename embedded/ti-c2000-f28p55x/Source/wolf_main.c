@@ -58,6 +58,10 @@
 #ifdef WOLF_HWAES
 #include <wolfssl/wolfcrypt/port/ti/ti-c2000.h>
 #endif
+#ifdef WOLF_ENTROPY
+#include <wolfssl/wolfcrypt/port/ti/ti-c2000-entropy.h>
+#include <wolfssl/wolfcrypt/random.h>
+#endif
 #ifdef WOLF_25519
 #include <wolfssl/wolfcrypt/curve25519.h>
 #include <wolfssl/wolfcrypt/ed25519.h>
@@ -1093,6 +1097,69 @@ static void wolf_mlkem768_test(void)
 }
 #endif /* WOLF_MLKEM */
 
+#ifdef WOLF_ENTROPY
+/* On-target validation of the entropy source.  Beyond the port's SP800-90B
+ * health tests, this screens what a stuck or test-only source would fail: the
+ * raw noise is neither constant nor grossly biased, and the DRBG seeds.  The
+ * bit-count check is coarse - the real min-entropy assessment is the host
+ * analysis of an ENTROPY_PROBE=1 capture (wolfSSL IDE/C2000/README.md). */
+static void wolf_entropy_test(void)
+{
+    static byte raw[256];
+    static byte s1[32], s2[32];
+    WC_RNG rng;
+    word32 ones;
+    word32 i;
+    int b;
+    int ret;
+    int src;
+
+    ret = wc_c2000_Entropy_Init();
+    printf("Entropy init + startup health test: %s (ret=%d)\r\n",
+           (ret == 0) ? "PASS" : "FAIL", ret);
+    if (ret != 0) {
+        return;
+    }
+
+    ret = wc_c2000_Entropy_SelfTest();
+    printf("Entropy liveness self-test (raw): %s (ret=%d)\r\n",
+           (ret == 0) ? "PASS" : "FAIL", ret);
+
+    /* Raw noise sanity per source: population count should sit near half. */
+    for (src = 0; src < 2; src++) {
+        ret = wc_c2000_Entropy_GetRaw(raw, (word32)sizeof(raw), src);
+        ones = 0;
+        for (i = 0; i < (word32)sizeof(raw); i++) {
+            for (b = 0; b < 8; b++) {
+                if ((raw[i] >> b) & 1) {
+                    ones++;
+                }
+            }
+        }
+        /* 2048 bits; accept 40%..60% ones, i.e. counts 820..1228. */
+        printf("Entropy raw src%d bit balance: %s (%lu/2048 ones)\r\n",
+               src,
+               (ret == 0 && ones > 819UL && ones < 1229UL) ? "PASS" : "FAIL",
+               (unsigned long)ones);
+    }
+
+    /* End to end: the DRBG must seed and produce differing blocks. */
+    ret = wc_InitRng(&rng);
+    printf("wc_InitRng with real entropy: %s (ret=%d)\r\n",
+           (ret == 0) ? "PASS" : "FAIL", ret);
+    if (ret == 0) {
+        ret = wc_RNG_GenerateBlock(&rng, s1, (word32)sizeof(s1));
+        if (ret == 0) {
+            ret = wc_RNG_GenerateBlock(&rng, s2, (word32)sizeof(s2));
+        }
+        printf("RNG blocks differ: %s\r\n",
+               (ret == 0 && XMEMCMP(s1, s2, sizeof(s1)) != 0)
+                   ? "PASS" : "FAIL");
+        wc_FreeRng(&rng);
+    }
+}
+#endif /* WOLF_ENTROPY */
+
 #ifdef WOLF_AES
 static void wolf_aes_test(void)
 {
@@ -1899,6 +1966,15 @@ int main(void)
     printf("\r\n");
     printf("=== wolfSSL wolfCrypt on TI C2000 LAUNCHXL-F28P55X ===\r\n");
 
+#ifdef WOLF_ENTROPY_PROBE
+    /* Measurement-only image: dump raw entropy samples and stop. */
+    {
+        extern void entropy_probe_run(void);
+        entropy_probe_run();
+    }
+    while (1) {
+    }
+#endif
 
 #ifdef WOLF_MEM_PROFILE
     /* Route XMALLOC/XFREE/XREALLOC through the heap high-water tracker. */
@@ -1958,6 +2034,11 @@ int main(void)
     (void)mlkem_roundtrip(WC_ML_KEM_1024, "ML-KEM-1024");
 #endif
 #endif /* WOLF_MLKEM */
+
+#ifdef WOLF_ENTROPY
+    printf("\r\n--- Entropy (oscillator jitter) ---\r\n");
+    wolf_entropy_test();
+#endif /* WOLF_ENTROPY */
 
 #ifdef WOLF_AES
     printf("\r\n--- AES (CBC/CTR/CFB/GCM) ---\r\n");
