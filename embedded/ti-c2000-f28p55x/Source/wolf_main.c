@@ -55,6 +55,9 @@
 #ifdef WOLF_AES
 #include <wolfssl/wolfcrypt/aes.h>
 #endif
+#ifdef WOLF_HWAES
+#include <wolfssl/wolfcrypt/port/ti/ti-c2000.h>
+#endif
 #ifdef WOLF_25519
 #include <wolfssl/wolfcrypt/curve25519.h>
 #include <wolfssl/wolfcrypt/ed25519.h>
@@ -1170,6 +1173,155 @@ static void wolf_aes_test(void)
 }
 #endif /* WOLF_AES */
 
+#ifdef WOLF_HWAES
+/* Cross-check the AESA hardware against software AES.
+ *
+ * Two contexts deliberately: 'hw' carries WOLFSSL_C2000_DEVID so every aes.c
+ * hook routes to the callback, 'sw' carries INVALID_DEVID so every hook skips
+ * it.  That separation matters -- with HAVE_AES_ECB on, a devId-bearing
+ * context would route even the software CTR path's internal wc_AesEcbEncrypt
+ * back to hardware.
+ *
+ * NIST SP800-38A vectors are asserted where we have them; multi-block,
+ * split-call and in-place cases are checked hardware-against-software, since
+ * software AES is already covered by wolfcrypt_test. */
+static void hw_report(const char* name, int r, const byte* a, const byte* b,
+                      word32 len)
+{
+    printf("HW %s: %s\r\n", name,
+        (r == 0 && XMEMCMP(a, b, len) == 0) ? "PASS" : "FAIL");
+}
+
+static void wolf_aes_hw_test(void)
+{
+    /* NIST SP800-38A F.1/F.2/F.5 four-block plaintext. */
+    static const byte pt[64] = {
+        0x6b,0xc1,0xbe,0xe2,0x2e,0x40,0x9f,0x96,
+        0xe9,0x3d,0x7e,0x11,0x73,0x93,0x17,0x2a,
+        0xae,0x2d,0x8a,0x57,0x1e,0x03,0xac,0x9c,
+        0x9e,0xb7,0x6f,0xac,0x45,0xaf,0x8e,0x51,
+        0x30,0xc8,0x1c,0x46,0xa3,0x5c,0xe4,0x11,
+        0xe5,0xfb,0xc1,0x19,0x1a,0x0a,0x52,0xef,
+        0xf6,0x9f,0x24,0x45,0xdf,0x4f,0x9b,0x17,
+        0xad,0x2b,0x41,0x7b,0xe6,0x6c,0x37,0x10};
+    static const byte k128[16] = {
+        0x2b,0x7e,0x15,0x16,0x28,0xae,0xd2,0xa6,
+        0xab,0xf7,0x15,0x88,0x09,0xcf,0x4f,0x3c};
+    static const byte k192[24] = {
+        0x8e,0x73,0xb0,0xf7,0xda,0x0e,0x64,0x52,
+        0xc8,0x10,0xf3,0x2b,0x80,0x90,0x79,0xe5,
+        0x62,0xf8,0xea,0xd2,0x52,0x2c,0x6b,0x7b};
+    static const byte k256[32] = {
+        0x60,0x3d,0xeb,0x10,0x15,0xca,0x71,0xbe,
+        0x2b,0x73,0xae,0xf0,0x85,0x7d,0x77,0x81,
+        0x1f,0x35,0x2c,0x07,0x3b,0x61,0x08,0xd7,
+        0x2d,0x98,0x10,0xa3,0x09,0x14,0xdf,0xf4};
+    static const byte iv[16] = {
+        0x00,0x01,0x02,0x03,0x04,0x05,0x06,0x07,
+        0x08,0x09,0x0a,0x0b,0x0c,0x0d,0x0e,0x0f};
+    static const byte ctr_iv[16] = {
+        0xf0,0xf1,0xf2,0xf3,0xf4,0xf5,0xf6,0xf7,
+        0xf8,0xf9,0xfa,0xfb,0xfc,0xfd,0xfe,0xff};
+    /* First-block published answers (F.1.1, F.2.1, F.5.1). */
+    static const byte ecb_ct1[16] = {
+        0x3a,0xd7,0x7b,0xb4,0x0d,0x7a,0x36,0x60,
+        0xa8,0x9e,0xca,0xf3,0x24,0x66,0xef,0x97};
+    static const byte cbc_ct1[16] = {
+        0x76,0x49,0xab,0xac,0x81,0x19,0xb2,0x46,
+        0xce,0xe9,0x8e,0x9b,0x12,0xe9,0x19,0x7d};
+    /* Full 64-octet CTR answer, not just block 1: this vector's counter starts
+     * at ...fe ff, so block 2 is the first needing a carry across an octet
+     * boundary, and checking only block 1 hides a broken increment. */
+    static const byte ctr_ct[64] = {
+        0x87,0x4d,0x61,0x91,0xb6,0x20,0xe3,0x26,
+        0x1b,0xef,0x68,0x64,0x99,0x0d,0xb6,0xce,
+        0x98,0x06,0xf6,0x6b,0x79,0x70,0xfd,0xff,
+        0x86,0x17,0x18,0x7b,0xb9,0xff,0xfd,0xff,
+        0x5a,0xe4,0xdf,0x3e,0xdb,0xd5,0xd3,0x5e,
+        0x5b,0x4f,0x09,0x02,0x0d,0xb0,0x3e,0xab,
+        0x1e,0x03,0x1d,0xda,0x2f,0xbe,0x03,0xd1,
+        0x79,0x21,0x70,0xa0,0xf3,0x00,0x9c,0xee};
+
+    /* .bss, not stack: the C28x stack is 16 KW and an Aes is not small. */
+    static Aes hw, sw;
+    static byte oh[64], os[64], dh[64];
+    int rh, rs;
+
+    if (wc_AesInit(&hw, NULL, WOLFSSL_C2000_DEVID) != 0 ||
+        wc_AesInit(&sw, NULL, INVALID_DEVID) != 0) {
+        printf("HW AES init: FAIL\r\n");
+        return;
+    }
+
+    /* ---- ECB, 64 octets (exercises the multi-block loop) ---- */
+    rh = wc_AesSetKey(&hw, k128, 16, NULL, AES_ENCRYPTION);
+    rs = wc_AesSetKey(&sw, k128, 16, NULL, AES_ENCRYPTION);
+    if (rh == 0) rh = wc_AesEcbEncrypt(&hw, oh, pt, 64);
+    if (rs == 0) rs = wc_AesEcbEncrypt(&sw, os, pt, 64);
+    hw_report("AES-128-ECB encrypt vs NIST", rh, oh, ecb_ct1, 16);
+    hw_report("AES-128-ECB encrypt vs SW", (rh | rs), oh, os, 64);
+
+    rh = wc_AesSetKey(&hw, k128, 16, NULL, AES_DECRYPTION);
+    if (rh == 0) rh = wc_AesEcbDecrypt(&hw, dh, oh, 64);
+    hw_report("AES-128-ECB decrypt round-trip", rh, dh, pt, 64);
+
+    /* ---- CBC, 64 octets ---- */
+    rh = wc_AesSetKey(&hw, k128, 16, iv, AES_ENCRYPTION);
+    rs = wc_AesSetKey(&sw, k128, 16, iv, AES_ENCRYPTION);
+    if (rh == 0) rh = wc_AesCbcEncrypt(&hw, oh, pt, 64);
+    if (rs == 0) rs = wc_AesCbcEncrypt(&sw, os, pt, 64);
+    hw_report("AES-128-CBC encrypt vs NIST", rh, oh, cbc_ct1, 16);
+    hw_report("AES-128-CBC encrypt vs SW", (rh | rs), oh, os, 64);
+
+    rh = wc_AesSetKey(&hw, k128, 16, iv, AES_DECRYPTION);
+    if (rh == 0) rh = wc_AesCbcDecrypt(&hw, dh, oh, 64);
+    hw_report("AES-128-CBC decrypt round-trip", rh, dh, pt, 64);
+
+    /* ---- CBC split across calls: proves aes->reg chaining ---- */
+    rh = wc_AesSetKey(&hw, k128, 16, iv, AES_ENCRYPTION);
+    if (rh == 0) rh = wc_AesCbcEncrypt(&hw, oh, pt, 16);
+    if (rh == 0) rh = wc_AesCbcEncrypt(&hw, oh + 16, pt + 16, 48);
+    hw_report("AES-128-CBC split-call chain", (rh | rs), oh, os, 64);
+
+    /* ---- CBC in-place decrypt: proves the last-block save ---- */
+    XMEMCPY(dh, os, 64);
+    rh = wc_AesSetKey(&hw, k128, 16, iv, AES_DECRYPTION);
+    if (rh == 0) rh = wc_AesCbcDecrypt(&hw, dh, dh, 64);
+    hw_report("AES-128-CBC in-place decrypt", rh, dh, pt, 64);
+
+    /* ---- CTR, 64 octets ---- */
+    rh = wc_AesSetKey(&hw, k128, 16, ctr_iv, AES_ENCRYPTION);
+    rs = wc_AesSetKey(&sw, k128, 16, ctr_iv, AES_ENCRYPTION);
+    if (rh == 0) rh = wc_AesCtrEncrypt(&hw, oh, pt, 64);
+    if (rs == 0) rs = wc_AesCtrEncrypt(&sw, os, pt, 64);
+    hw_report("AES-128-CTR vs NIST (64B)", rh, oh, ctr_ct, 64);
+    hw_report("AES-128-CTR SW vs NIST (64B)", rs, os, ctr_ct, 64);
+    hw_report("AES-128-CTR vs SW", (rh | rs), oh, os, 64);
+
+    /* ---- CTR split at a non-block boundary: proves aes->left/aes->tmp ---- */
+    rh = wc_AesSetKey(&hw, k128, 16, ctr_iv, AES_ENCRYPTION);
+    if (rh == 0) rh = wc_AesCtrEncrypt(&hw, oh, pt, 10);
+    if (rh == 0) rh = wc_AesCtrEncrypt(&hw, oh + 10, pt + 10, 54);
+    hw_report("AES-128-CTR partial split", (rh | rs), oh, os, 64);
+
+    /* ---- 192- and 256-bit keys: the 6- and 8-word AES_setKey1 paths ---- */
+    rh = wc_AesSetKey(&hw, k192, 24, iv, AES_ENCRYPTION);
+    rs = wc_AesSetKey(&sw, k192, 24, iv, AES_ENCRYPTION);
+    if (rh == 0) rh = wc_AesCbcEncrypt(&hw, oh, pt, 64);
+    if (rs == 0) rs = wc_AesCbcEncrypt(&sw, os, pt, 64);
+    hw_report("AES-192-CBC encrypt vs SW", (rh | rs), oh, os, 64);
+
+    rh = wc_AesSetKey(&hw, k256, 32, iv, AES_ENCRYPTION);
+    rs = wc_AesSetKey(&sw, k256, 32, iv, AES_ENCRYPTION);
+    if (rh == 0) rh = wc_AesCbcEncrypt(&hw, oh, pt, 64);
+    if (rs == 0) rs = wc_AesCbcEncrypt(&sw, os, pt, 64);
+    hw_report("AES-256-CBC encrypt vs SW", (rh | rs), oh, os, 64);
+
+    wc_AesFree(&hw);
+    wc_AesFree(&sw);
+}
+#endif /* WOLF_HWAES */
+
 #ifdef WOLF_25519
 static void wolf_curve25519_test(void)
 {
@@ -1747,9 +1899,25 @@ int main(void)
     printf("\r\n");
     printf("=== wolfSSL wolfCrypt on TI C2000 LAUNCHXL-F28P55X ===\r\n");
 
+
 #ifdef WOLF_MEM_PROFILE
     /* Route XMALLOC/XFREE/XREALLOC through the heap high-water tracker. */
     wolf_mem_install();
+#endif
+
+#ifdef WOLF_HWAES
+    /* wolfCrypt_Init() is mandatory first: it sets every device-table slot to
+     * INVALID_DEVID, and RegisterDevice only claims a slot marked that way.
+     * Without it the table is BSS-zero and registration fails with BUFFER_E. */
+    if (wolfCrypt_Init() != 0) {
+        printf("wolfCrypt_Init: FAIL\r\n");
+    }
+    else if (wc_C2000_Init(WOLFSSL_C2000_DEVID) != 0) {
+        printf("C2000 AESA init: FAIL\r\n");
+    }
+    else {
+        printf("C2000 AESA init: PASS\r\n");
+    }
 #endif
 
     wolf_sha3_256_test();
@@ -1795,6 +1963,11 @@ int main(void)
     printf("\r\n--- AES (CBC/CTR/CFB/GCM) ---\r\n");
     wolf_aes_test();
 #endif /* WOLF_AES */
+
+#ifdef WOLF_HWAES
+    printf("\r\n--- AES hardware (AESA) vs software ---\r\n");
+    wolf_aes_hw_test();
+#endif /* WOLF_HWAES */
 
 #ifdef WOLF_25519
     printf("\r\n--- Curve25519 (X25519) + Ed25519 ---\r\n");

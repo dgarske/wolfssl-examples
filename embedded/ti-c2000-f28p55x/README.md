@@ -10,7 +10,7 @@ The default build runs a KAT suite plus `wolfcrypt_test` and (optionally) `bench
 - SHA3-224/256/384/512, SHAKE128, SHAKE256 (split-64 Keccak permutation, ~53% faster than the generic C path on C28x)
 - ML-DSA-87 (Dilithium level 5) verify, and the full keygen+sign+verify round-trip (`SIGN=1`)
 - ML-KEM-768 (FIPS 203) keygen/encap/decap round-trip (`MLKEM=1`)
-- AES-128/192/256 CBC/CTR/CFB/GCM (`AES=1`); AES-CMAC, AES-CCM, AES-GMAC (`AESEXTRA=1`)
+- AES-128/192/256 CBC/CTR/CFB/GCM (`AES=1`); AES-CMAC, AES-CCM, AES-GMAC (`AESEXTRA=1`); hardware-accelerated AES-ECB/CBC/CTR on the on-chip AESA block (`HWAES=1`)
 - HMAC-SHA256 + HKDF (`HKDF=1`)
 - ChaCha20-Poly1305 AEAD + Poly1305 (`CHACHA=1`)
 - X25519 + Ed25519 (`X25519=1`)
@@ -54,6 +54,7 @@ Each is `make <NAME>=1` (default 0 unless noted), additive on top of the default
 | `MLKEM=1` | ML-KEM-768 (FIPS 203) |
 | `AES=1` | AES-CBC/CTR/CFB/GCM (table-driven, `GCM_SMALL`) |
 | `AESEXTRA=1` | AES-CMAC, AES-CCM, AES-GMAC (implies the AES core) |
+| `HWAES=1` | Offload AES-ECB/CBC/CTR to the on-chip AESA accelerator via crypto callbacks (implies the AES core). See "Hardware AES" below |
 | `X25519=1` | Curve25519 (X25519) + Ed25519 |
 | `HKDF=1` | HMAC + HKDF (RFC 2104 / RFC 5869) |
 | `CHACHA=1` | ChaCha20-Poly1305 AEAD (RFC 8439) |
@@ -100,6 +101,31 @@ ML-DSA-87 (asymmetric, @150 MHz): verify ~225 ms/op; keygen and signing also run
 - Big SP/`*_NO_MALLOC` structs (ecc_key, RsaKey, ChaChaPoly_Aead) belong in `.bss`/static, not on the stack: the SP point/modexp call tree plus a stack-allocated key can overflow the 16 KW stack.
 - `wc_RsaSSL_Verify` in the `RSA_VERIFY_ONLY` / `SP_NO_MALLOC` config runs the modexp in place in the caller's buffer, so the output buffer must be at least the key size (256 B for RSA-2048).
 
+## Hardware AES (`HWAES=1`)
+
+The F28P550SJ has an on-chip AES accelerator ("AESA", a TI EIP-120t at `0x00042000`) that C2000Ware exposes through `driverlib/f28p55x/driverlib/aes.h`. `HWAES=1` offloads AES-ECB/CBC/CTR to it via the wolfCrypt crypto-callback framework (`wolfcrypt/src/port/ti/ti-c2000-aes.c` in the wolfSSL tree, gated on `WOLFSSL_C2000_AES`). `driverlib.lib` is already linked by this example, so no extra build plumbing is needed.
+
+Software AES stays compiled in. A context opts into hardware with `wc_AesInit(&aes, NULL, WOLFSSL_C2000_DEVID)`; one initialised with `INVALID_DEVID` runs pure software. `wolf_aes_hw_test()` uses both and compares them, which is the point: on a 16-bit-byte target the octet marshalling into the accelerator's 32-bit registers is the highest-risk part of the port, and a mismatch is exactly what you want to see. The harness prints 13 lines covering ECB/CBC/CTR at 128/192/256 bits, multi-block, split calls, in-place decrypt and a non-block-aligned CTR split, each checked against software and (for the first block of each mode) against the published NIST SP800-38A vector.
+
+`HWAES=1` also defines `WC_USE_DEVID=0x2000` so `wolfcrypt_test` and `benchmark` exercise the device too -- without it they init every context with `INVALID_DEVID` and silently measure software.
+
+Measured at 150 MHz (`make HWAES=1 BENCH=1`, which prints paired `SW`/`HW` rows):
+
+| Operation | Software | AESA | Speedup |
+|---|---|---|---|
+| AES-128-ECB encrypt | 471 KiB/s | 2.37 MiB/s | 5.2x |
+| AES-256-ECB encrypt | 377 KiB/s | 2.32 MiB/s | 6.3x |
+| AES-128-CBC encrypt | 405 KiB/s | 2.36 MiB/s | 6.0x |
+| AES-128-CBC decrypt | 388 KiB/s | 2.34 MiB/s | 6.2x |
+| AES-256-CBC encrypt | 333 KiB/s | 2.31 MiB/s | 7.1x |
+| AES-256-CBC decrypt | 322 KiB/s | 2.29 MiB/s | 7.3x |
+| AES-128-CTR | 408 KiB/s | 1.45 MiB/s | 3.6x |
+| AES-256-CTR | 335 KiB/s | 1.44 MiB/s | 4.4x |
+
+AES-GCM barely moves (~32 to ~34 KiB/s): only its internal ECB calls reach the accelerator and the `GCM_SMALL` byte-wise GHASH dominates. Using the block's own GCM mode is future work. CFB, CCM, CMAC and everything else stay in software -- the callback returns `CRYPTOCB_UNAVAILABLE` and wolfCrypt falls through transparently.
+
+Two hardware quirks are documented in `IDE/C2000/README.md` in the wolfSSL tree and worth knowing before touching this code: driverlib expects little-endian octets within each 32-bit word (not a raw cast of a `byte*`), and the block's CTR counter increment does **not** match wolfCrypt's big-endian 128-bit `IncrementAesCounter()` once an increment carries across an octet boundary -- so the port drives the accelerator in ECB mode and keeps the counter in software. Both quirks produce a *correct first block*, which is why the multi-block cases in the harness matter.
+
 ## RNG caveat
 
-The F28P55x has **no hardware TRNG**. The example uses `WOLFSSL_GENSEED_FORTEST` (random.c's built-in incrementing test seed feeding the real SHA-256 Hash-DRBG): exercises the real DRBG path but is **development-only, not cryptographically secure**. For production, wire a real entropy source into `wc_GenerateSeed()`.
+The F28P550SJ has **no hardware TRNG**. This build uses `WOLFSSL_GENSEED_FORTEST` (random.c's built-in incrementing test seed feeding the real SHA-256 Hash-DRBG): it exercises the real DRBG path but is **development-only, not cryptographically secure**. For production, wire a real entropy source into `wc_GenerateSeed()`.

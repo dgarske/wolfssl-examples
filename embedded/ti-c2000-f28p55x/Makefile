@@ -36,13 +36,16 @@ endif
 
 CL := $(CGT_ROOT)/bin/cl2000
 
+# Header/ must precede $(WOLFROOT): wolfSSL's documented user_settings.h
+# workflow puts one at the wolfSSL tree root, which would otherwise shadow this
+# example's and silently build a different configuration.
 INCS := \
   -I$(CGT_ROOT)/include \
   -I$(DRV) \
   -I$(DEV)/common/include \
   -I$(DEV)/headers/include \
-  -I$(WOLFROOT) \
-  -I$(CURDIR)/Header
+  -I$(CURDIR)/Header \
+  -I$(WOLFROOT)
 
 # --float_support=fpu32 and --abi=eabi must match the prebuilt driverlib.lib.
 # Define WOLF_C2000_SCI_STDOUT to route printf to SCIA (XDS110 COM); omit it to
@@ -108,13 +111,16 @@ ifeq ($(MLKEM),1)
     $(WOLFROOT)/wolfcrypt/src/wc_mlkem_poly.c
 endif
 
+# aes.c + wc_encrypt.c are wanted by AES=1, AESEXTRA=1 and HWAES=1.  Each sets
+# NEED_AES_CORE and the pair is appended once below: the build is a single
+# cl2000 invocation, so a source listed twice multiply-defines at link.
+NEED_AES_CORE := 0
+
 # AES=1 adds AES-CBC/CTR/CFB/GCM (software, table-driven; GCM_SMALL GHASH).
 AES ?= 0
 ifeq ($(AES),1)
   CFLAGS  += --define=WOLF_AES
-  WC_SRCS += \
-    $(WOLFROOT)/wolfcrypt/src/aes.c \
-    $(WOLFROOT)/wolfcrypt/src/wc_encrypt.c
+  NEED_AES_CORE := 1
 endif
 
 # X25519=1 adds Curve25519 (X25519) + Ed25519 (default fe[10] 32-bit backend).
@@ -164,14 +170,24 @@ ifeq ($(AESEXTRA),1)
   CFLAGS  += --define=WOLF_AES --define=WOLF_AESEXTRA
   WC_SRCS += \
     $(WOLFROOT)/wolfcrypt/src/cmac.c
-  # aes.c and wc_encrypt.c are also pulled in by AES=1; add them here only when
-  # AES=1 did not, so they are not listed twice in the single cl2000 invocation
-  # (which would multiply-define their symbols at link).
-  ifneq ($(AES),1)
-    WC_SRCS += \
-      $(WOLFROOT)/wolfcrypt/src/aes.c \
-      $(WOLFROOT)/wolfcrypt/src/wc_encrypt.c
-  endif
+  NEED_AES_CORE := 1
+endif
+
+# HWAES=1 offloads AES-ECB/CBC/CTR to the on-chip AESA accelerator (TI EIP-120t
+# at 0x42000) via crypto callbacks.  Software AES stays compiled in so one image
+# can compare both paths.  Implies AES=1; driverlib.lib is already linked.
+HWAES ?= 0
+ifeq ($(HWAES),1)
+  CFLAGS  += --define=WOLF_AES --define=WOLF_HWAES
+  # WC_USE_DEVID points wolfcrypt_test and benchmark at the hardware device;
+  # without it they init every Aes context with INVALID_DEVID and silently
+  # measure/test software only.  It is derived from WOLFSSL_C2000_DEVID in
+  # Header/user_settings.h rather than repeated as a literal here, so the two
+  # cannot drift apart.
+  WC_SRCS += \
+    $(WOLFROOT)/wolfcrypt/src/cryptocb.c \
+    $(WOLFROOT)/wolfcrypt/src/port/ti/ti-c2000-aes.c
+  NEED_AES_CORE := 1
 endif
 
 # RSA=1 adds RSA verify (SP math backend, shared with the ECC P-256 build).
@@ -259,6 +275,13 @@ endif
 MEMPROF ?= 0
 ifeq ($(MEMPROF),1)
   CFLAGS += --define=WOLF_MEM_PROFILE
+endif
+
+# Append the shared AES core once, after every toggle has had its say.
+ifeq ($(NEED_AES_CORE),1)
+  WC_SRCS += \
+    $(WOLFROOT)/wolfcrypt/src/aes.c \
+    $(WOLFROOT)/wolfcrypt/src/wc_encrypt.c
 endif
 
 ALL_SRCS := $(WC_SRCS) $(HARNESS_SRCS) $(BSP_SRCS) $(ASM_SRCS)

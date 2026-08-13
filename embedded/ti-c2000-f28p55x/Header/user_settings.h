@@ -329,6 +329,36 @@ extern "C" {
 #define NO_AES
 #endif
 
+#ifdef WOLF_HWAES
+/* Offload AES-ECB/CBC/CTR to the on-chip AESA block through the crypto
+ * callback framework.  Software AES stays compiled in: a context opts into
+ * hardware with wc_AesInit(&aes, NULL, WOLFSSL_C2000_DEVID), while one
+ * initialised with INVALID_DEVID stays pure software.  That is what lets the
+ * KAT harness cross-check the two in a single image, so deliberately do NOT
+ * define WOLF_CRYPTO_CB_ONLY_AES. */
+#undef  WOLF_CRYPTO_CB
+#define WOLF_CRYPTO_CB
+#undef  WOLFSSL_C2000_AES
+#define WOLFSSL_C2000_AES
+
+/* HAVE_AES_ECB is what compiles wc_AesEcbEncrypt/Decrypt and, with it, the ECB
+ * crypto-callback hook the hardware port needs; WOLFSSL_AES_DIRECT alone only
+ * creates the callback plumbing, not the entry points.  Kept inside the HWAES
+ * block: it also switches the software CTR path to the bulk-ECB strategy and
+ * costs code size, so a software-only AES=1 build should not pay for it. */
+#undef  HAVE_AES_ECB
+#define HAVE_AES_ECB
+
+/* Single source of truth for the AESA device id.  ti-c2000.h defaults this to
+ * 0x2000 behind #ifndef, so setting it here wins and lets WC_USE_DEVID be
+ * derived from it: wolfcrypt_test and benchmark then target the same device
+ * the KAT harness passes to wc_AesInit(), with no literal to keep in sync. */
+#undef  WOLFSSL_C2000_DEVID
+#define WOLFSSL_C2000_DEVID 0x2000
+#undef  WC_USE_DEVID
+#define WC_USE_DEVID WOLFSSL_C2000_DEVID
+#endif
+
 /* Curve25519 (X25519) + Ed25519.  Enabled with EXTRA_CFLAGS=--define=WOLF_25519
  * (X25519=1 build).  No __uint128_t and no SP-25519 backend on C28x, so the
  * default fe[10] 32-bit-limb field arithmetic is used; Ed25519 reuses the
