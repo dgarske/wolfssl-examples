@@ -13,16 +13,17 @@ It is built inside the RealTek AmebaPro2 FreeRTOS SDK (which provides the startu
 - HMAC-SHA256 under the HUK (`wc_HmacInit` with `devId = WC_HUK_DEVID`, then `wc_HmacSetKey`/`wc_HmacUpdate`/`wc_HmacFinal`): the MAC is deterministic for a given seed and differs for a wrong seed.
 - HUK-bound ECDSA P-256 sign: a key is generated in software, its private scalar is wrapped under the HUK (ECB-encrypted with the HUK device), and signing then goes through the HUK device (unwrap + sign); the signature verifies against the software public key.
 - HW ECDSA P-256 verify offload: the same signature is then verified through the HW engine (the public point is imported into a `WC_HUK_DEVID` key so `wc_ecc_verify_hash` dispatches to `hal_ecdsa`), and a tampered digest is shown to be rejected. No HUK context is needed to verify -- any P-256 public key.
+- **Plaintext-key AES (second device):** with `WOLFSSL_RTL8735B_AES` also enabled (see `user_settings.h`), the example registers a second crypto-callback device, `wc_Rtl8735b_AesRegister(WC_RTL8735B_AES_DEVID)`, that runs a caller-supplied AES key directly on the HW engine with no HUK binding. It reproduces a published AES-GCM test vector (proving the key is used verbatim), then encrypts the same 32 key bytes through both devices to show the plaintext-key ciphertext differs from the HUK device-bound ciphertext -- the two devices coexist and are selected per `Aes` by `devId`.
 
 ## Prerequisites
 
 - RealTek AmebaPro2 FreeRTOS SDK: https://github.com/Ameba-AIoT/ameba-rtos-pro2
 - RealTek ASDK 10.3.0 toolchain (GCC 10.3.0): https://github.com/Ameba-AIoT/ameba-toolchain (tag `V10.3.0-ameba-rtos-pro2`). The stock system `arm-none-eabi-gcc` does not build the SDK (newlib/lwip header clashes); use the ASDK toolchain.
-- wolfSSL with the RealTek HUK port (`wolfcrypt/src/port/realtek/rtl8735b.c` and `wolfssl/wolfcrypt/port/realtek/rtl8735b.h`). Enable with `WOLFSSL_RTL8735B_HUK` and `WOLF_CRYPTO_CB`.
+- wolfSSL with the RealTek HUK port (`wolfcrypt/src/port/realtek/rtl8735b.c` and `wolfssl/wolfcrypt/port/realtek/rtl8735b.h`). Enable with `WOLFSSL_RTL8735B_HUK` and `WOLF_CRYPTO_CB`. This example's `user_settings.h` also defines `WOLFSSL_RTL8735B_AES` (the plaintext-key AES device), so the wolfSSL tree must be new enough to provide `wc_Rtl8735b_AesRegister` / `WC_RTL8735B_AES_DEVID`; remove that define to build against an older HUK-only port.
 
 ## Files
 
-- `main.c` -- the example application (a FreeRTOS task that registers the HUK device and runs the AES-GCM/ECB/CBC/CTR checks plus unaligned-buffer GCM, in-place/multi-call CBC, non-12-byte-IV rejection, HMAC-SHA256, and HUK-bound ECDSA sign + HW verify checks).
+- `main.c` -- the example application (a FreeRTOS task that registers the HUK device and runs the AES-GCM/ECB/CBC/CTR checks plus unaligned-buffer GCM, in-place/multi-call CBC, non-12-byte-IV rejection, HMAC-SHA256, and HUK-bound ECDSA sign + HW verify checks). With `WOLFSSL_RTL8735B_AES` it also registers the plaintext-key AES device and runs its GCM KAT + coexistence, ECB FIPS-197 KAT, unaligned-buffer, and non-12-byte-IV checks.
 - `user_settings.h` -- a lean wolfCrypt configuration for this example.
 - `wolfcrypt_huk.cmake` -- wiring that adds wolfCrypt + the RealTek HUK port to the SDK app build.
 - `test/` -- a separate `wolfcrypt_test` + `wolfcrypt_benchmark` example for this target with three backend modes (pure C, Thumb-2 / SP Cortex-M, and RealTek hardware offload); see `test/README.md`.
@@ -56,6 +57,7 @@ Remove the J27 jumper and reset to boot. The console (UART, 115200) prints:
 === wolfCrypt AmebaPro2 (RTL8735B) HUK example ===
 [PASS] wolfCrypt_Init
 [PASS] wc_Rtl8735b_HukRegister
+[PASS] wc_Rtl8735b_AesRegister
 == AES-GCM (full payload) under HUK-derived key ==
 [PASS] AesInit(devId=WC_HUK_DEVID)
 [PASS] AesGcmSetKey(seed,32)
@@ -76,6 +78,23 @@ Remove the J27 jumper and reset to boot. The console (UART, 115200) prints:
 [PASS] verify with software public key
 [PASS] HW ECDSA verify (good sig)
 [PASS] HW ECDSA verify (tampered -> reject)
+== AES-GCM with a plaintext key (devId=WC_RTL8735B_AES_DEVID) ==
+[PASS] AesInit(devId=WC_RTL8735B_AES_DEVID)
+[PASS] AesGcmSetKey(plaintext 128-bit key)
+[PASS] AesGcmEncrypt
+[PASS] ciphertext matches published vector
+[PASS] tag matches published vector
+[PASS] AesGcmDecrypt verifies
+[PASS] plaintext round-trips
+[PASS] tampered tag -> AES_GCM_AUTH_E
+[PASS] plaintext-key encrypt (256-bit)
+[PASS] HUK-seed encrypt (same 32 bytes)
+[PASS] plaintext CT != HUK CT (distinct keys per devId)
+== AES-ECB with a plaintext key (FIPS-197 KAT) ==
+[PASS] ciphertext matches FIPS-197 vector
+[PASS] AesEcb round-trip
+== AES-GCM plaintext key, UNALIGNED buffers (port bounces) ==  ... round-trip PASS
+== AES-GCM plaintext key, non-12-byte IV must hard-fail ==  ... 16-byte IV rejected PASS
 === done ===
 ```
 

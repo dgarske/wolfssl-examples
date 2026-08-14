@@ -1,6 +1,8 @@
 /* user_settings.h -- wolfCrypt config for the AmebaPro2 (RTL8735B) HUK example
  * built inside the RealTek FreeRTOS SDK. HUK crypto-callback demo: AES
- * (GCM/ECB/CBC/CTR), HMAC-SHA256, and ECDSA P-256. */
+ * (GCM/ECB/CBC/CTR), HMAC-SHA256, and ECDSA P-256. Also enables the plaintext-
+ * key AES device (WOLFSSL_RTL8735B_AES) -- a second crypto-callback device that
+ * runs a caller-supplied AES key directly on the HW engine (no HUK binding). */
 
 #ifndef RTL8735B_HUK_USER_SETTINGS_H
 #define RTL8735B_HUK_USER_SETTINGS_H
@@ -11,6 +13,7 @@ extern "C" {
 
 /* ---- HUK crypto-callback device (our RealTek port) ---- */
 #define WOLFSSL_RTL8735B_HUK
+#define WOLFSSL_RTL8735B_AES       /* plaintext-key AES device (2nd devId) */
 #define WOLF_CRYPTO_CB
 #define WOLF_CRYPTO_CB_COPY        /* HUK HMAC buffer copy/free ops */
 #define WOLF_CRYPTO_CB_FREE
