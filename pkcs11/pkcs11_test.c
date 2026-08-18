@@ -555,7 +555,12 @@ int gen_ec_keys_label(Pkcs11Token* token, ecc_key* key, char* label, int devId)
     if (ret != 0)
         fprintf(stderr, "Failed to initialize EC key: %d\n", ret);
     if (ret == 0) {
-        ret = wc_ecc_make_key_ex(&rng, 32, key, ECC_CURVE_DEF);
+        /* Request derive as well as sign: this key is used for both ECDH
+         * and ECDSA below. PKCS#11 leaves the CKA_DERIVE and CKA_SIGN
+         * defaults up to the token, so a token that grants only what was
+         * asked for refuses the other operation. */
+        ret = wc_ecc_make_key_ex2(&rng, 32, key, ECC_CURVE_DEF,
+                                  WC_ECC_FLAG_DEC_SIGN | WC_ECC_FLAG_DERIVE);
         if (ret != 0)
             fprintf(stderr, "Failed to generate EC key: %d\n", ret);
     }
@@ -571,7 +576,12 @@ int gen_ec_keys(Pkcs11Token* token, ecc_key* key, unsigned char* id, int idLen,
     if (ret != 0)
         fprintf(stderr, "Failed to initialize EC key: %d\n", ret);
     if (ret == 0) {
-        ret = wc_ecc_make_key_ex(&rng, 32, key, ECC_CURVE_DEF);
+        /* Request derive as well as sign: this key is used for both ECDH
+         * and ECDSA below. PKCS#11 leaves the CKA_DERIVE and CKA_SIGN
+         * defaults up to the token, so a token that grants only what was
+         * asked for refuses the other operation. */
+        ret = wc_ecc_make_key_ex2(&rng, 32, key, ECC_CURVE_DEF,
+                                  WC_ECC_FLAG_DEC_SIGN | WC_ECC_FLAG_DERIVE);
         if (ret != 0)
             fprintf(stderr, "Failed to generate EC key: %d\n", ret);
     }
