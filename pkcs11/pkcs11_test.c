@@ -27,6 +27,24 @@
 #include <wolfssl/wolfcrypt/error-crypt.h>
 #include <wolfssl/wolfcrypt/logging.h>
 
+/* Ask the token for derive as well as sign when generating the EC key.
+ *
+ * WC_ECC_FLAG_DERIVE is an enum member added to wolfSSL after 5.9.2, so the
+ * preprocessor cannot test for it directly, and a version test does not help
+ * either: 5.9.2-stable and current master both report LIBWOLFSSL_VERSION_HEX
+ * 0x05009002. The Makefile probes for it by compiling against the installed
+ * headers and defines HAVE_WC_ECC_FLAG_DERIVE when it is present.
+ *
+ * Without it the key is generated sign-only, which is all a wolfSSL that
+ * predates the flag can request. The ECDH test then fails on a token that
+ * grants only what was asked for, such as the OP-TEE PKCS#11 TA; tokens that
+ * enable CKA_DERIVE by default are unaffected. */
+#ifdef HAVE_WC_ECC_FLAG_DERIVE
+    #define EC_KEYGEN_FLAGS (WC_ECC_FLAG_DEC_SIGN | WC_ECC_FLAG_DERIVE)
+#else
+    #define EC_KEYGEN_FLAGS (WC_ECC_FLAG_DEC_SIGN)
+#endif
+
 #ifndef NO_RSA
 static const unsigned char client_key_der_2048[] =
 {
@@ -560,7 +578,7 @@ int gen_ec_keys_label(Pkcs11Token* token, ecc_key* key, char* label, int devId)
          * defaults up to the token, so a token that grants only what was
          * asked for refuses the other operation. */
         ret = wc_ecc_make_key_ex2(&rng, 32, key, ECC_CURVE_DEF,
-                                  WC_ECC_FLAG_DEC_SIGN | WC_ECC_FLAG_DERIVE);
+                                  EC_KEYGEN_FLAGS);
         if (ret != 0)
             fprintf(stderr, "Failed to generate EC key: %d\n", ret);
     }
@@ -581,7 +599,7 @@ int gen_ec_keys(Pkcs11Token* token, ecc_key* key, unsigned char* id, int idLen,
          * defaults up to the token, so a token that grants only what was
          * asked for refuses the other operation. */
         ret = wc_ecc_make_key_ex2(&rng, 32, key, ECC_CURVE_DEF,
-                                  WC_ECC_FLAG_DEC_SIGN | WC_ECC_FLAG_DERIVE);
+                                  EC_KEYGEN_FLAGS);
         if (ret != 0)
             fprintf(stderr, "Failed to generate EC key: %d\n", ret);
     }

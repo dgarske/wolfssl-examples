@@ -28,7 +28,8 @@
  * through the PKCS#11 API itself, so it works against any implementation and
  * needs nothing installed on the target beyond the PKCS#11 library.
  *
- * It is safe to re-run: an already-initialized token is left untouched.
+ * It is safe to re-run: a fully initialized token is left untouched, and one
+ * left half-initialized by an interrupted run is completed rather than wiped.
  *
  * Note this deliberately talks to the PKCS#11 library directly rather than
  * going through wolfSSL. Token initialization is administrative, not
@@ -48,6 +49,9 @@
  * uses are. From PKCS#11 v2.40, CK_TOKEN_INFO flags. */
 #ifndef CKF_TOKEN_INITIALIZED
     #define CKF_TOKEN_INITIALIZED 0x00000400UL
+#endif
+#ifndef CKF_USER_PIN_INITIALIZED
+    #define CKF_USER_PIN_INITIALIZED 0x00000008UL
 #endif
 
 /* PKCS#11 labels are a fixed-width, space-padded field - not a C string. */
@@ -77,26 +81,41 @@ static int init_token(CK_FUNCTION_LIST* func, CK_SLOT_ID slotId,
         return 1;
     }
 
-    if ((tokenInfo.flags & CKF_TOKEN_INITIALIZED) != 0) {
+    /* Initialization is two steps that can be interrupted between: C_InitToken
+     * sets the SO PIN and marks the token initialized, and only a later SO
+     * login can set the user PIN. Treat the token as done only when both have
+     * happened, so a run that died in between can be completed by re-running
+     * rather than needing the token wiped. */
+    if ((tokenInfo.flags & CKF_TOKEN_INITIALIZED) != 0 &&
+        (tokenInfo.flags & CKF_USER_PIN_INITIALIZED) != 0) {
         printf("Token in slot %lu is already initialized - nothing to do\n",
                (unsigned long)slotId);
         return 0;
     }
 
-    memset(padded, ' ', sizeof(padded));
-    memcpy(padded, label, labelSz);
+    if ((tokenInfo.flags & CKF_TOKEN_INITIALIZED) == 0) {
+        memset(padded, ' ', sizeof(padded));
+        memcpy(padded, label, labelSz);
 
-    /* Sets the SO PIN and the label, and puts the token in a state where the
-     * SO can log in to set the user PIN. */
-    rv = func->C_InitToken(slotId, (CK_UTF8CHAR_PTR)soPin,
-                           (CK_ULONG)strlen(soPin), padded);
-    if (rv != CKR_OK) {
-        fprintf(stderr, "Failed to initialize token: 0x%lx\n",
-                (unsigned long)rv);
-        return 1;
+        /* Sets the SO PIN and the label, and puts the token in a state where
+         * the SO can log in to set the user PIN. */
+        rv = func->C_InitToken(slotId, (CK_UTF8CHAR_PTR)soPin,
+                               (CK_ULONG)strlen(soPin), padded);
+        if (rv != CKR_OK) {
+            fprintf(stderr, "Failed to initialize token: 0x%lx\n",
+                    (unsigned long)rv);
+            return 1;
+        }
+        printf("Initialized token in slot %lu with label \"%s\"\n",
+               (unsigned long)slotId, label);
     }
-    printf("Initialized token in slot %lu with label \"%s\"\n",
-           (unsigned long)slotId, label);
+    else {
+        /* Resuming: re-running C_InitToken here would destroy every object
+         * already on the token, so pick up at the user PIN instead. The SO PIN
+         * must match the one the earlier run set. */
+        printf("Token in slot %lu is initialized but has no user PIN"
+               " - setting it\n", (unsigned long)slotId);
+    }
 
     /* The user PIN can only be set by the SO, over a read/write session. */
     rv = func->C_OpenSession(slotId, CKF_SERIAL_SESSION | CKF_RW_SESSION,
@@ -139,6 +158,8 @@ int main(int argc, char* argv[])
     CK_SLOT_ID            slotId;
     CK_RV                 rv;
     int                   ret;
+    unsigned long         slotVal;
+    char*                 slotEnd;
 
     if (argc != 6) {
         fprintf(stderr, "Usage: pkcs11_inittoken <libname> <slot> <tokenname>"
@@ -146,7 +167,15 @@ int main(int argc, char* argv[])
         return 1;
     }
 
-    slotId = (CK_SLOT_ID)atoi(argv[2]);
+    /* strtoul rather than atoi: atoi returns 0 for non-numeric input, which
+     * would silently initialize slot 0 - the wrong token, destructively. */
+    slotEnd = NULL;
+    slotVal = strtoul(argv[2], &slotEnd, 10);
+    if (slotEnd == argv[2] || *slotEnd != '\0') {
+        fprintf(stderr, "Slot must be a number: %s\n", argv[2]);
+        return 1;
+    }
+    slotId = (CK_SLOT_ID)slotVal;
 
     dlib = dlopen(argv[1], RTLD_NOW);
     if (dlib == NULL) {

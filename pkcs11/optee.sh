@@ -7,11 +7,13 @@
 # Requires tee-supplicant to be running; without it every call fails at
 # C_Initialize because the TA cannot be loaded.
 
-if [ $# -gt 0 ]
-then
-  OPTEE_SLOTID=$1
-  shift
-fi
+# Only treat the first argument as a slot id if it is numeric, so that
+# "./optee.sh pkcs11_rsa" runs one example against the default slot instead of
+# silently consuming the example name as a slot id.
+case "${1:-}" in
+  '' | *[!0-9]* ) ;;
+  * ) OPTEE_SLOTID=$1; shift ;;
+esac
 
 # OP-TEE's PKCS#11 client library. It is usually installed as a normal shared
 # library, but on an embedded rootfs it is often staged elsewhere, in which

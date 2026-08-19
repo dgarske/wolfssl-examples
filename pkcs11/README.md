@@ -243,14 +243,26 @@ what was asked for.
 The examples therefore request both explicitly:
 
 ```c
-wc_ecc_make_key_ex2(&rng, 32, key, ECC_CURVE_DEF,
-                    WC_ECC_FLAG_DEC_SIGN | WC_ECC_FLAG_DERIVE);
+wc_ecc_make_key_ex2(&rng, 32, key, ECC_CURVE_DEF, EC_KEYGEN_FLAGS);
 ```
 
-`WC_ECC_FLAG_DERIVE` requires wolfSSL with PKCS #11 derive+sign key generation
-support. Against an older wolfSSL, drop that flag; `pkcs11_test` will then fail
-on a strict token at the first ECDSA operation with
-`CKR_KEY_FUNCTION_NOT_PERMITTED`, surfacing as `WC_HW_E` (-248).
+`EC_KEYGEN_FLAGS` is `WC_ECC_FLAG_DEC_SIGN | WC_ECC_FLAG_DERIVE` when the
+installed wolfSSL has `WC_ECC_FLAG_DERIVE`, and `WC_ECC_FLAG_DEC_SIGN` alone
+when it does not. No edit is needed either way: the Makefile probes for the
+flag by compiling against the installed headers and defines
+`HAVE_WC_ECC_FLAG_DERIVE` when it is present.
+
+The probe exists because neither of the usual tests works here.
+`WC_ECC_FLAG_DERIVE` is an enum member rather than a macro, so `#ifdef` cannot
+see it, and a version test cannot distinguish the two cases either, because
+wolfSSL master and v5.9.2-stable both report `LIBWOLFSSL_VERSION_HEX`
+`0x05009002`.
+
+Against a wolfSSL without the flag the key is generated sign-only, which is all
+that library can request. `pkcs11_test` then fails on a strict token - the
+OP-TEE TA among them - at the first ECDH operation with
+`CKR_KEY_FUNCTION_NOT_PERMITTED`, surfacing as `WC_HW_E` (-248). Tokens that
+enable `CKA_DERIVE` by default are unaffected.
 
 All the examples pass, including RSA key generation, ECDSA, ECDH, AES-CBC,
 AES-GCM, HMAC and RNG.

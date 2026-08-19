@@ -12,11 +12,13 @@ cd "$(dirname "$0")"
 
 # Same argument convention as optee.sh: an optional slot id first, then any
 # specific examples to run.
-if [ $# -gt 0 ]
-then
-  OPTEE_SLOTID=$1
-  shift
-fi
+# Only treat the first argument as a slot id if it is numeric, so that
+# "./optee-init.sh pkcs11_rsa" runs one example against the default slot instead of
+# silently consuming the example name as a slot id.
+case "${1:-}" in
+  '' | *[!0-9]* ) ;;
+  * ) OPTEE_SLOTID=$1; shift ;;
+esac
 
 if [ -z "$OPTEE_LIB" ]
 then
