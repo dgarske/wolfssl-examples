@@ -111,6 +111,15 @@ ifeq ($(MLKEM),1)
     $(WOLFROOT)/wolfcrypt/src/wc_mlkem_poly.c
 endif
 
+# MLDSA=1 builds the octet-boundary KAT image: ML-DSA-44/65/87 verify,
+# wc_MlDsaKey_VerifyCtxHash() over SHA-256/SHA-512, and a verify from a PACKED
+# key and signature via wc_UnpackOctets().  All three parameter sets are
+# compiled in, so the test/benchmark harness is dropped to make room.
+MLDSA ?= 0
+ifeq ($(MLDSA),1)
+  CFLAGS  += --define=WOLF_MLDSA_ALL_LEVELS
+endif
+
 # aes.c + wc_encrypt.c are wanted by AES=1, AESEXTRA=1 and HWAES=1.  Each sets
 # NEED_AES_CORE and the pair is appended once below: the build is a single
 # cl2000 invocation, so a source listed twice multiply-defines at link.
@@ -235,6 +244,8 @@ ifeq ($(DH),1)
     $(WOLFROOT)/wolfcrypt/src/sp_c32.c
 endif
 
+HARNESS_EXTRA :=
+
 HARNESS_SRCS := \
   $(WOLFROOT)/wolfcrypt/test/test.c \
   $(WOLFROOT)/wolfcrypt/benchmark/benchmark.c
@@ -260,6 +271,14 @@ ifeq ($(SIGN),1)
   CFLAGS  += --define=WOLF_MLDSA_SIGN --define=NO_CRYPT_TEST \
              --define=NO_CRYPT_BENCHMARK
   LNKCMD  := $(CURDIR)/28p55x_wolf_sign_lnk.cmd
+  HARNESS_SRCS :=
+else ifeq ($(MLDSA),1)
+ifeq ($(BENCH),1)
+$(error MLDSA=1 and BENCH=1 are separate images - build them one at a time)
+endif
+  CFLAGS  += --define=WOLF_MLDSA_OCTETS --define=NO_CRYPT_TEST \
+             --define=NO_CRYPT_BENCHMARK
+  LNKCMD  := $(CURDIR)/28p55x_wolf_flash_lnk.cmd
   HARNESS_SRCS :=
 else
   LNKCMD  := $(CURDIR)/28p55x_wolf_flash_lnk.cmd
