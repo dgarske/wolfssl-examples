@@ -153,6 +153,16 @@ extern "C" {
 #undef  WOLFSSL_NO_ML_DSA_65
 #define WOLFSSL_NO_ML_DSA_65
 
+#ifdef WOLF_MLDSA_ALL_LEVELS
+/* The octet-boundary KAT image (make MLDSA=1) verifies at all three parameter
+ * sets.  Level 44 matters disproportionately here: it is the only one whose w1
+ * commitment encoder packs 6-bit values (mldsa_encode_w1_88_c), so it is the
+ * only one that exercises that packer's octet masking at CHAR_BIT == 16.
+ * Levels 65 and 87 pack 4-bit values, which cannot overflow an octet. */
+#undef  WOLFSSL_NO_ML_DSA_44
+#undef  WOLFSSL_NO_ML_DSA_65
+#endif
+
 /* Raw key/sig import - no ASN.1 (both modes). */
 #undef  WOLFSSL_MLDSA_NO_ASN1
 #define WOLFSSL_MLDSA_NO_ASN1

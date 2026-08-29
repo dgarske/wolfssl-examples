@@ -101,7 +101,16 @@
 #endif
 #include <wolfcrypt/test/test.h>
 #include <wolfcrypt/benchmark/benchmark.h>
+#ifdef WOLF_MLDSA_OCTETS
+/* The octet-boundary image carries its own seed-derived vectors for all three
+ * parameter sets (it needs the matching private key to produce the pre-hash
+ * signatures), and reuses the same kat_mldsa87_* names.  The canonical FIPS 204
+ * ML-DSA-87 vectors from wolfcrypt/test/test.c stay in the default image. */
+#include <wolfssl/wolfcrypt/hash.h>
+#include "mldsa_octet_kat.h"
+#else
 #include "mldsa87_kat.h"
+#endif
 #ifdef WOLF_ECC
 #include "ecc_p256_kat.h"
 #endif
@@ -870,7 +879,7 @@ static void wolf_sha1_test(void)
 }
 #endif /* WOLF_SHA1 */
 
-#ifndef WOLF_MLDSA_SIGN
+#if !defined(WOLF_MLDSA_SIGN) && !defined(WOLF_MLDSA_OCTETS)
 /* ML-DSA-87 verify known-answer test (real pk/msg/sig from test.c).  This
  * is the primary deliverable: a deterministic, RNG-free verify on HW.
  * Key struct is static (large; WOLFSSL_MLDSA_VERIFY_NO_MALLOC pins buffers
@@ -956,7 +965,187 @@ static void wolf_mldsa87_verify_test(void)
 #endif
     wc_MlDsaKey_Free(&mldsa_key);
 }
-#endif /* !WOLF_MLDSA_SIGN */
+#endif /* !WOLF_MLDSA_SIGN && !WOLF_MLDSA_OCTETS */
+
+#ifdef WOLF_MLDSA_OCTETS
+/* ------------------------------------------------------------------------- */
+/* ML-DSA octet-boundary tests (make MLDSA=1)                                */
+/* ------------------------------------------------------------------------- */
+/* Three things this proves on real 16-bit-byte silicon:
+ *
+ * 1. Verify is correct at ML-DSA-44, -65 and -87.  Level 44 is the one that
+ *    matters most: its w1 commitment encoder packs 6-bit values, so it is the
+ *    only parameter set that can push a value above 255 into a byte cell.
+ * 2. wc_MlDsaKey_VerifyCtxHash() (HashML-DSA / pre-hash, FIPS 204 section 5.4)
+ *    works over SHA-256 and SHA-512 with a non-empty context string.  That path
+ *    adds the OID table and the 0x01 || ctxLen || ctx || OID || PHm domain
+ *    separator on top of plain verify.
+ * 3. A public key and signature that arrive PACKED - two octets per 16-bit
+ *    cell, the layout an octet stream has coming off flash or a byte-oriented
+ *    link - verify correctly once expanded with wc_UnpackOctets().
+ *
+ * One key struct is shared across all of it: with WOLFSSL_MLDSA_VERIFY_NO_MALLOC
+ * the verify workspace is pinned inside wc_MlDsaKey, which sizes to the largest
+ * enabled parameter set and is far too big for the 16 KW C28x stack. */
+
+/* Unpacked destinations for the packed-stream case.  Static for the same
+ * reason: an ML-DSA-65 signature is 3309 cells = 6618 octets of C28x RAM. */
+static byte     mo_pub[WC_MLDSA_65_PUB_KEY_SIZE];
+static byte     mo_sig[WC_MLDSA_65_SIG_SIZE];
+static wc_MlDsaKey mo_key;
+static byte     mo_msg[512];
+
+/* Verify one KAT and print a PASS/FAIL line.  hashAlg < 0 selects plain
+ * (non pre-hash) verify over the whole message; otherwise the pre-hash API is
+ * used with the supplied digest. */
+static void mo_verify(const char* what, int type, const byte* pub,
+    word32 pubLen, const byte* sig, word32 sigLen, int hashAlg,
+    const byte* hash, word32 hashLen)
+{
+    int res = 0;
+    int ret;
+
+    ret = wc_MlDsaKey_Init(&mo_key, NULL, INVALID_DEVID);
+    if (ret == 0) {
+        ret = wc_MlDsaKey_SetParams(&mo_key, type);
+    }
+    if (ret == 0) {
+        ret = wc_MlDsaKey_ImportPubRaw(&mo_key, pub, pubLen);
+    }
+    if (ret == 0) {
+        if (hashAlg < 0) {
+            ret = wc_MlDsaKey_VerifyCtx(&mo_key, sig, sigLen, NULL, 0, mo_msg,
+                (word32)sizeof(mo_msg), &res);
+        }
+        else {
+            ret = wc_MlDsaKey_VerifyCtxHash(&mo_key, sig, sigLen,
+                (const byte*)KAT_MLDSA_CTX,
+                (byte)(sizeof(KAT_MLDSA_CTX) - 1), hash, hashLen, hashAlg,
+                &res);
+        }
+    }
+    printf("%s %s (ret=%d res=%d)\r\n", what,
+           ((ret == 0) && (res == 1)) ? "PASS" : "FAIL", ret, res);
+    wc_MlDsaKey_Free(&mo_key);
+}
+
+/* wc_PackOctets()/wc_UnpackOctets() on their own, over a span with an odd
+ * length so the partial trailing cell is covered too. */
+static void mo_pack_roundtrip(void)
+{
+    byte src[65];
+    byte packed[65];
+    byte back[65];
+    int  i;
+    int  ret;
+    int  ok;
+
+    for (i = 0; i < (int)sizeof(src); i++) {
+        src[i] = (byte)((i * 7 + 1) & 0xFF);
+    }
+    ret = wc_PackOctets(packed, (word32)sizeof(packed), src,
+        (word32)sizeof(src));
+    if (ret == 0) {
+        ret = wc_UnpackOctets(back, (word32)sizeof(back), packed,
+            (word32)sizeof(src));
+    }
+    ok = (ret == 0) && (XMEMCMP(src, back, sizeof(src)) == 0);
+    printf("wc_Pack/UnpackOctets round-trip: %s (ret=%d)\r\n",
+           ok ? "PASS" : "FAIL", ret);
+}
+
+/* The case TI asked about: the key and signature are stored PACKED (two octets
+ * per 16-bit cell) and expanded before use. */
+static void mo_packed_verify(void)
+{
+    int res = 0;
+    int ret;
+
+    ret = wc_UnpackOctets(mo_pub, (word32)sizeof(mo_pub),
+        (const byte*)kat_mldsa65_pub_packed, (word32)sizeof(mo_pub));
+    if (ret == 0) {
+        ret = wc_UnpackOctets(mo_sig, (word32)sizeof(mo_sig),
+            (const byte*)kat_mldsa65_sig_packed, (word32)sizeof(mo_sig));
+    }
+    /* The expanded buffers must match the plain arrays octet for octet - that
+     * is the whole claim about the two representations holding the same
+     * signature. */
+    if (ret == 0) {
+        if ((XMEMCMP(mo_pub, kat_mldsa65_pub, sizeof(mo_pub)) != 0) ||
+            (XMEMCMP(mo_sig, kat_mldsa65_sig, sizeof(mo_sig)) != 0)) {
+            ret = -1;
+        }
+    }
+    if (ret == 0) {
+        ret = wc_MlDsaKey_Init(&mo_key, NULL, INVALID_DEVID);
+    }
+    if (ret == 0) {
+        ret = wc_MlDsaKey_SetParams(&mo_key, WC_ML_DSA_65);
+    }
+    if (ret == 0) {
+        ret = wc_MlDsaKey_ImportPubRaw(&mo_key, mo_pub, (word32)sizeof(mo_pub));
+    }
+    if (ret == 0) {
+        ret = wc_MlDsaKey_VerifyCtx(&mo_key, mo_sig, (word32)sizeof(mo_sig),
+            NULL, 0, mo_msg, (word32)sizeof(mo_msg), &res);
+    }
+    printf("ML-DSA-65 packed-signature verify: %s (ret=%d res=%d)\r\n",
+           ((ret == 0) && (res == 1)) ? "PASS" : "FAIL", ret, res);
+    wc_MlDsaKey_Free(&mo_key);
+}
+
+static void wolf_mldsa_octet_test(void)
+{
+    byte sha256[WC_SHA256_DIGEST_SIZE];
+    byte sha512[WC_SHA512_DIGEST_SIZE];
+    int  i;
+
+    /* Same message the vectors were signed over: msg[i] = i & 0xFF.  The mask
+     * is not cosmetic on this part - a C28x byte cell would otherwise store
+     * 256..511 verbatim and corrupt the octet-wise hash input. */
+    for (i = 0; i < (int)sizeof(mo_msg); i++) {
+        mo_msg[i] = (byte)(i & 0xFF);
+    }
+    (void)wc_Sha256Hash(mo_msg, (word32)sizeof(mo_msg), sha256);
+    (void)wc_Sha512Hash(mo_msg, (word32)sizeof(mo_msg), sha512);
+
+    /* State the octet/cell/RAM arithmetic once, since it is the thing that
+     * surprises people on a 16-bit-byte target. */
+    printf("octet model: CHAR_BIT=%d, %lu octet(s) per byte cell; "
+           "ML-DSA-65 sig = %lu octets = %lu cells = %lu bytes of RAM\r\n",
+           (int)CHAR_BIT, (unsigned long)WC_OCTETS_PER_BYTE,
+           (unsigned long)WC_MLDSA_65_SIG_SIZE,
+           (unsigned long)WC_MLDSA_65_SIG_SIZE,
+           (unsigned long)WC_MLDSA_65_SIG_SIZE * (CHAR_BIT / 8));
+
+    mo_pack_roundtrip();
+
+    mo_verify("ML-DSA-44 verify KAT:", WC_ML_DSA_44, kat_mldsa44_pub,
+        (word32)sizeof(kat_mldsa44_pub), kat_mldsa44_sig,
+        (word32)sizeof(kat_mldsa44_sig), -1, NULL, 0);
+    mo_verify("ML-DSA-65 verify KAT:", WC_ML_DSA_65, kat_mldsa65_pub,
+        (word32)sizeof(kat_mldsa65_pub), kat_mldsa65_sig,
+        (word32)sizeof(kat_mldsa65_sig), -1, NULL, 0);
+    mo_verify("ML-DSA-87 verify KAT:", WC_ML_DSA_87, kat_mldsa87_pub,
+        (word32)sizeof(kat_mldsa87_pub), kat_mldsa87_sig,
+        (word32)sizeof(kat_mldsa87_sig), -1, NULL, 0);
+
+    mo_verify("ML-DSA-65 VerifyCtxHash SHA-256 KAT:", WC_ML_DSA_65,
+        kat_mldsa65_pub, (word32)sizeof(kat_mldsa65_pub),
+        kat_mldsa65_sig_ph256, (word32)sizeof(kat_mldsa65_sig_ph256),
+        WC_HASH_TYPE_SHA256, sha256, (word32)sizeof(sha256));
+    mo_verify("ML-DSA-87 VerifyCtxHash SHA-256 KAT:", WC_ML_DSA_87,
+        kat_mldsa87_pub, (word32)sizeof(kat_mldsa87_pub),
+        kat_mldsa87_sig_ph256, (word32)sizeof(kat_mldsa87_sig_ph256),
+        WC_HASH_TYPE_SHA256, sha256, (word32)sizeof(sha256));
+    mo_verify("ML-DSA-87 VerifyCtxHash SHA-512 KAT:", WC_ML_DSA_87,
+        kat_mldsa87_pub, (word32)sizeof(kat_mldsa87_pub),
+        kat_mldsa87_sig_ph512, (word32)sizeof(kat_mldsa87_sig_ph512),
+        WC_HASH_TYPE_SHA512, sha512, (word32)sizeof(sha512));
+
+    mo_packed_verify();
+}
+#endif /* WOLF_MLDSA_OCTETS */
 
 #ifdef WOLF_MLDSA_SIGN
 /* ML-DSA-87 sign+verify round-trip (keygen -> sign -> verify).  Exercises
@@ -2007,7 +2196,10 @@ int main(void)
     wolf_sha1_test();
 #endif
 
-#ifndef WOLF_MLDSA_SIGN
+#if defined(WOLF_MLDSA_OCTETS)
+    printf("\r\n--- ML-DSA octet boundary (44/65/87, pre-hash, packed) ---\r\n");
+    wolf_mldsa_octet_test();
+#elif !defined(WOLF_MLDSA_SIGN)
     wolf_mldsa87_verify_test();
 #else
     wolf_mldsa87_sign_test();
