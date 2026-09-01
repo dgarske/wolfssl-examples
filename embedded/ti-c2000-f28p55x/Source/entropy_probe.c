@@ -48,6 +48,13 @@
 /* Counter1 counts down from 0xFFFFF, capping the window near 34,900 INTOSC
  * cycles at 300 MHz PLL / 10 MHz INTOSC; keep well under that. */
 #define PROBE_CNT1_SEED   0xFFFFFUL
+
+/* A sample taken after a DCC ERROR flag or a guard-loop timeout is not noise,
+ * it is a misconfigured clock mux or a stalled counter.  Count both so a
+ * capture with any nonzero total can be rejected rather than analysed. */
+static uint32_t probeDccErrors;
+static uint32_t probeDccTimeouts;
+static uint32_t probeAdcTimeouts;
 #define PROBE_SAMPLES     1024
 /* printf over SCI dominates; keep the ADC set smaller. */
 #define PROBE_ADC_SAMPLES 1024
@@ -87,11 +94,18 @@ static uint32_t probe_dccSample(uint32_t base, DCC_Count0ClockSource src0,
 
     DCC_enableModule(base);
 
-    /* Bounded wait, scaled to the window, so a bad mux cannot hang. */
+    /* Bounded wait, scaled to the window, so a bad mux cannot hang.  Record
+     * why we stopped: only a clean done-signal yields a usable sample. */
     for (guard = 0; guard < (window * 256UL) + 100000UL; guard++) {
         if (DCC_getSingleShotStatus(base) || DCC_getErrorStatus(base)) {
             break;
         }
+    }
+    if (DCC_getErrorStatus(base)) {
+        probeDccErrors++;
+    }
+    else if (!DCC_getSingleShotStatus(base)) {
+        probeDccTimeouts++;
     }
 
     return (PROBE_CNT1_SEED - (DCC_getCounter1Value(base) & PROBE_CNT1_SEED));
@@ -139,6 +153,9 @@ static uint16_t probe_adcSample(void)
         if (ADC_getInterruptStatus(ADCC_BASE, ADC_INT_NUMBER1)) {
             break;
         }
+    }
+    if (guard >= 1000000UL) {
+        probeAdcTimeouts++;
     }
 
     return ADC_readResult(ADCCRESULT_BASE, ADC_SOC_NUMBER0);
@@ -191,7 +208,7 @@ static void probe_dumpPackedDcc(const char* tag, uint32_t base,
 }
 
 
-static void probe_dumpPackedAdc(uint32_t nbytes)
+static void probe_dumpPackedAdc(const char* tag, uint32_t nbytes)
 {
     uint32_t i;
     int b;
@@ -199,7 +216,7 @@ static void probe_dumpPackedAdc(uint32_t nbytes)
 
     for (i = 0; i < nbytes; i++) {
         if ((i % 32U) == 0U) {
-            printf("\r\nE6 0 ");
+            printf("\r\n%s 0 ", tag);
         }
         acc = 0U;
         for (b = 0; b < 8; b++) {
@@ -218,8 +235,10 @@ void entropy_probe_run(void)
     uint32_t i;
 
     printf("\r\n=== ENTROPY PROBE ===\r\n");
-    printf("SYSCLK %lu Hz, samples/config %d\r\n",
-           (unsigned long)DEVICE_SYSCLK_FREQ, (int)PROBE_SAMPLES);
+    /* %lu, not %d: int is 16 bits here and PROBE_PACKED_BYTES is 32768. */
+    printf("SYSCLK %lu Hz, samples/config %lu, packed stream %lu octets\r\n",
+           (unsigned long)DEVICE_SYSCLK_FREQ, (unsigned long)PROBE_SAMPLES,
+           (unsigned long)PROBE_PACKED_BYTES);
 
     probe_dccInit();
     probe_adcInit();
@@ -244,8 +263,11 @@ void entropy_probe_run(void)
                         DCC_COUNT1SRC_PLL, 256UL, PROBE_PACKED_BYTES);
     probe_dumpPackedDcc("E5", DCC0_BASE, DCC_COUNT0SRC_INTOSC2,
                         DCC_COUNT1SRC_PLL, 256UL, PROBE_PACKED_BYTES);
-    probe_dumpPackedAdc(PROBE_PACKED_BYTES);
+    probe_dumpPackedAdc("E6", PROBE_PACKED_BYTES);
 
+    printf("\r\nDCC errors %lu, DCC timeouts %lu, ADC timeouts %lu\r\n",
+           (unsigned long)probeDccErrors, (unsigned long)probeDccTimeouts,
+           (unsigned long)probeAdcTimeouts);
     printf("\r\nPROBE DONE\r\n");
 }
 

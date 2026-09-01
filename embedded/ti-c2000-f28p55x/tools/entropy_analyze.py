@@ -30,7 +30,6 @@ an upper bound, and low measured correlation is what makes it a reasonable one.
 Usage:
     python3 tools/entropy_analyze.py capture.log
     python3 tools/entropy_analyze.py --selftest
-    tail -f /tmp/uart-monitor/latest/ttyACMx.log | python3 tools/entropy_analyze.py -
 """
 
 import math
@@ -56,15 +55,22 @@ RAW = OrderedDict((
 ))
 
 BANNER = "=== ENTROPY PROBE ==="
+# The probe reports how many samples were taken after a DCC ERROR flag or a
+# guard-loop timeout.  Any nonzero count means the capture is not pure noise.
+HEALTH_RE = re.compile(r"DCC errors (\d+), DCC timeouts (\d+), "
+                       r"ADC timeouts (\d+)")
 DONE = "PROBE DONE"
 MAX_LAG = 64
+# Below this the MCV bound is too wide to be worth reporting.
+MIN_PACKED_OCTETS = 256
 Z_99 = 2.5758293035489004          # two-sided 99% normal quantile
 
 
 def first_pass(text):
-    """The board loops main(), so the probe output repeats.  Return just the
-    first complete pass, so a long capture does not silently concatenate
-    several runs into one sample set."""
+    """Return just the first complete probe pass.  The probe image runs once
+    and then spins, so a normal capture holds one pass - but a capture that
+    spans a reset or a re-flash would otherwise concatenate several runs into
+    one sample set."""
     start = text.find(BANNER)
     if start < 0:
         return text
@@ -77,21 +83,41 @@ def first_pass(text):
 
 
 def parse(text):
-    """tag -> list of ints, in emission order."""
+    """Returns (out, per_window).
+
+    out        tag -> list of ints, in emission order (all windows merged).
+    per_window tag -> {window: [ints]}.
+
+    The raw DCC tags are emitted once per sweep window (256/1024/4096), and a
+    count scales with the window, so merging them would mix populations of
+    different magnitude.  The packed streams the min-entropy estimate uses are
+    emitted once, at a single window, so out[] is correct for those."""
     out = {}
+    per_window = {}
     # A console line is "<tag> <window> <hex> <hex> ...".  Match per line, and
     # never across a newline: the tags and window counts are themselves valid
     # hex, so a multi-line match would swallow the next line's header as data.
     # Tolerate any timestamp or prefix a log wrapper put ahead of the tag.
     line_re = re.compile(r"\b(E[0-9])[^\S\n]+(\d+)[^\S\n]+"
                          r"((?:[0-9a-fA-F]+[^\S\n]*)+)$")
+    skipped = 0
     for line in text.splitlines():
-        m = line_re.search(line.rstrip())
+        line = line.rstrip()
+        m = line_re.search(line)
         if m is None:
+            # A line that starts with a probe tag but does not parse means a
+            # corrupted capture, not unrelated console output - say so.
+            if re.match(r"\s*E[0-9]\b", line):
+                skipped += 1
             continue
-        out.setdefault(m.group(1), []).extend(
-            int(t, 16) for t in m.group(3).split())
-    return out
+        vals = [int(t, 16) for t in m.group(3).split()]
+        out.setdefault(m.group(1), []).extend(vals)
+        per_window.setdefault(m.group(1), {}).setdefault(
+            int(m.group(2)), []).extend(vals)
+    if skipped:
+        sys.stderr.write("warning: %d probe line(s) did not parse - capture may "
+                         "be corrupted or truncated\n" % skipped)
+    return out, per_window
 
 
 def unpack_bits(octets):
@@ -266,7 +292,16 @@ def main():
         with open(path, errors="replace") as f:
             text = f.read()
 
-    data = parse(first_pass(text))
+    health = HEALTH_RE.search(text)
+    if health is None:
+        sys.stderr.write("warning: no probe health line - old probe image, or "
+                         "the capture is truncated\n")
+    elif any(int(g) for g in health.groups()):
+        sys.exit("probe reported %s DCC errors, %s DCC timeouts, %s ADC "
+                 "timeouts - these samples are not noise, reject the capture"
+                 % health.groups())
+
+    data, per_window = parse(first_pass(text))
     if not data:
         sys.exit("no probe tags found - is this an ENTROPY_PROBE=1 capture?")
 
@@ -276,6 +311,10 @@ def main():
         if not octets:
             sys.stderr.write("warning: no %s samples (%s)\n" % (tag, label))
             continue
+        if len(octets) < MIN_PACKED_OCTETS:
+            sys.stderr.write("warning: %s has only %d octets (< %d) - the "
+                             "min-entropy estimate will be unreliable\n"
+                             % (tag, len(octets), MIN_PACKED_OCTETS))
         bad = [v for v in octets if v > 0xFF]
         if bad:
             sys.exit("%s: %d values exceed one octet - capture is corrupt"
@@ -283,11 +322,15 @@ def main():
         rows.append(report(tag, label, octets))
 
     for tag, label in RAW.items():
-        vals = data.get(tag)
-        if vals:
-            a = np.asarray(vals, dtype=np.int64)
-            print("%s  %s: %d samples, min %d max %d mean %.1f, "
-                  "%d distinct" % (tag, label, len(a), a.min(), a.max(),
+        wins = per_window.get(tag)
+        if not wins:
+            continue
+        # Per window: a raw count scales with the window, so pooling them
+        # would report a spread that is an artifact of the sweep.
+        for win in sorted(wins):
+            a = np.asarray(wins[win], dtype=np.int64)
+            print("%s  %s [window %d]: %d samples, min %d max %d mean %.1f, "
+                  "%d distinct" % (tag, label, win, len(a), a.min(), a.max(),
                                    a.mean(), len(np.unique(a))))
     print()
 

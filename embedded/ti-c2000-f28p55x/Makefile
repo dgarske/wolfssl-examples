@@ -310,6 +310,13 @@ endif
 # can estimate min-entropy.  Measurement only - no crypto runs.
 ENTROPY_PROBE ?= 0
 ifeq ($(ENTROPY_PROBE),1)
+ifneq ($(SIGN)$(MLDSA)$(BENCH),000)
+$(error ENTROPY_PROBE=1 is a standalone measurement image - build it on its own)
+endif
+  # Nothing after entropy_probe_run() executes, so linking wolfcrypt_test and
+  # benchmark would only bloat the image.
+  CFLAGS       += --define=NO_CRYPT_TEST --define=NO_CRYPT_BENCHMARK
+  HARNESS_SRCS :=
   CFLAGS       += --define=WOLF_ENTROPY_PROBE --define=NO_CRYPT_TEST \
                   --define=NO_CRYPT_BENCHMARK
   HARNESS_EXTRA += $(CURDIR)/Source/entropy_probe.c

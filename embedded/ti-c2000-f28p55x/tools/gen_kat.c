@@ -32,7 +32,6 @@
 #include <wolfssl/wolfcrypt/sha512.h>
 #include <wolfssl/wolfcrypt/hash.h>
 #include <stdio.h>
-#include <string.h>
 
 #define MSG_SZ   512
 #define OUT_NAME "mldsa_octet_kat.h"
@@ -167,17 +166,25 @@ int main(void)
     for (i = 0; i < MSG_SZ; i++)
         msg[i] = (byte)(i & 0xFF);
 
+    ret = wolfCrypt_Init();
+    if (ret != 0) {
+        fprintf(stderr, "wolfCrypt_Init failed: %d\n", ret);
+        return 1;
+    }
+
     ret = wc_Sha256Hash(msg, MSG_SZ, sha256);
     if (ret == 0)
         ret = wc_Sha512Hash(msg, MSG_SZ, sha512);
     if (ret != 0) {
         fprintf(stderr, "hash failed: %d\n", ret);
+        wolfCrypt_Cleanup();
         return 1;
     }
 
     out = fopen(OUT_NAME, "w");
     if (out == NULL) {
         fprintf(stderr, "cannot open output\n");
+        wolfCrypt_Cleanup();
         return 1;
     }
 
@@ -205,7 +212,9 @@ int main(void)
     if (ret != 0) {
         /* Do not leave a truncated header behind for the build to pick up. */
         remove(OUT_NAME);
+        wolfCrypt_Cleanup();
         return 1;
     }
+    wolfCrypt_Cleanup();
     return 0;
 }

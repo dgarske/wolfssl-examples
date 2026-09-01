@@ -60,7 +60,9 @@
 #endif
 #ifdef WOLF_ENTROPY
 #include <wolfssl/wolfcrypt/port/ti/ti-c2000-entropy.h>
-#include <wolfssl/wolfcrypt/random.h>
+#endif
+#ifdef WOLF_ENTROPY_PROBE
+#include "entropy_probe.h"
 #endif
 #ifdef WOLF_25519
 #include <wolfssl/wolfcrypt/curve25519.h>
@@ -978,7 +980,7 @@ static void wolf_mldsa87_verify_test(void)
  * signature that arrive PACKED verify once wc_UnpackOctets() expands them.
  * One key struct is shared - WOLFSSL_MLDSA_VERIFY_NO_MALLOC pins the verify
  * workspace inside it, far too big for the 16 KW C28x stack. */
-/* Static: an ML-DSA-65 signature is 3309 cells = 6618 octets of C28x RAM. */
+/* Static: an ML-DSA-65 signature is 3309 octets = 3309 cells = 6618 bytes. */
 static byte     mo_pub[WC_MLDSA_65_PUB_KEY_SIZE];
 static byte     mo_sig[WC_MLDSA_65_SIG_SIZE];
 static wc_MlDsaKey mo_key;
@@ -1030,12 +1032,23 @@ static void mo_pack_roundtrip(void)
         src[i] = (byte)((i * 7 + 1) & 0xFF);
     }
     ret = wc_PackOctets(packed, (word32)sizeof(packed), src,
-        (word32)sizeof(src));
+        (word32)sizeof(src), (word32)sizeof(src));
     if (ret == 0) {
         ret = wc_UnpackOctets(back, (word32)sizeof(back), packed,
-            (word32)sizeof(src));
+            (word32)sizeof(packed), (word32)sizeof(src));
     }
+    /* Round-trip alone would also pass for an identity implementation, so
+     * check the packed layout itself: cell 0 must carry the first
+     * WC_OCTETS_PER_BYTE octets, low octet first. */
     ok = (ret == 0) && (XMEMCMP(src, back, sizeof(src)) == 0);
+    if (ok) {
+        word32 expect = 0;
+        word32 e;
+        for (e = 0; e < WC_OCTETS_PER_BYTE; e++) {
+            expect |= (word32)src[e] << (8 * e);
+        }
+        ok = ((word32)packed[0] == expect);
+    }
     printf("wc_Pack/UnpackOctets round-trip: %s (ret=%d)\r\n",
            ok ? "PASS" : "FAIL", ret);
 }
@@ -1047,10 +1060,16 @@ static void mo_packed_verify(void)
     int ret;
 
     ret = wc_UnpackOctets(mo_pub, (word32)sizeof(mo_pub),
-        (const byte*)kat_mldsa65_pub_packed, (word32)sizeof(mo_pub));
+        (const byte*)kat_mldsa65_pub_packed,
+        (word32)(sizeof(kat_mldsa65_pub_packed) /
+                 sizeof(kat_mldsa65_pub_packed[0])),
+        (word32)sizeof(mo_pub));
     if (ret == 0) {
         ret = wc_UnpackOctets(mo_sig, (word32)sizeof(mo_sig),
-            (const byte*)kat_mldsa65_sig_packed, (word32)sizeof(mo_sig));
+            (const byte*)kat_mldsa65_sig_packed,
+            (word32)(sizeof(kat_mldsa65_sig_packed) /
+                     sizeof(kat_mldsa65_sig_packed[0])),
+            (word32)sizeof(mo_sig));
     }
     /* Expanded buffers must match the plain arrays octet for octet. */
     if (ret == 0) {
@@ -1098,8 +1117,9 @@ static void wolf_mldsa_octet_test(void)
         return;
     }
 
-    printf("octet model: CHAR_BIT=%d, %lu octet(s) per byte cell; "
-           "ML-DSA-65 sig = %lu octets = %lu cells = %lu bytes of RAM\r\n",
+    printf("octet model: CHAR_BIT=%d, one octet per byte cell, %lu octet(s) "
+           "per cell when packed; ML-DSA-65 sig = %lu octets = %lu cells = "
+           "%lu bytes of RAM\r\n",
            (int)CHAR_BIT, (unsigned long)WC_OCTETS_PER_BYTE,
            (unsigned long)WC_MLDSA_65_SIG_SIZE,
            (unsigned long)WC_MLDSA_65_SIG_SIZE,
@@ -1133,6 +1153,36 @@ static void wolf_mldsa_octet_test(void)
         kat_mldsa87_pub, (word32)sizeof(kat_mldsa87_pub),
         kat_mldsa87_sig_ph512, (word32)sizeof(kat_mldsa87_sig_ph512),
         WC_HASH_TYPE_SHA512, sha512, (word32)sizeof(sha512));
+
+    /* Negative case: every check above is positive, so a verify that returned
+     * success unconditionally - or a w1 encoder that collapsed distinct
+     * commitments - would pass them all.  Flip one octet of the level-44
+     * signature and require a clean rejection. */
+    {
+        static byte bad[WC_MLDSA_44_SIG_SIZE];
+        int bres = 1;
+        int bret;
+
+        XMEMCPY(bad, kat_mldsa44_sig, sizeof(bad));
+        bad[sizeof(bad) / 2] ^= 0x01;
+
+        bret = wc_MlDsaKey_Init(&mo_key, NULL, INVALID_DEVID);
+        if (bret == 0) {
+            bret = wc_MlDsaKey_SetParams(&mo_key, WC_ML_DSA_44);
+        }
+        if (bret == 0) {
+            bret = wc_MlDsaKey_ImportPubRaw(&mo_key, kat_mldsa44_pub,
+                (word32)sizeof(kat_mldsa44_pub));
+        }
+        if (bret == 0) {
+            bret = wc_MlDsaKey_VerifyCtx(&mo_key, bad, (word32)sizeof(bad),
+                NULL, 0, mo_msg, (word32)sizeof(mo_msg), &bres);
+        }
+        /* A corrupt signature must be rejected, not error out. */
+        printf("ML-DSA-44 corrupted-signature reject: %s (ret=%d res=%d)\r\n",
+               ((bret == 0) && (bres == 0)) ? "PASS" : "FAIL", bret, bres);
+        wc_MlDsaKey_Free(&mo_key);
+    }
 
     mo_packed_verify();
 }
@@ -1305,9 +1355,18 @@ static void wolf_entropy_test(void)
     printf("Entropy liveness self-test (raw): %s (ret=%d)\r\n",
            (ret == 0) ? "PASS" : "FAIL", ret);
 
-    /* Raw noise sanity per source: population count should sit near half. */
-    for (src = 0; src < 2; src++) {
+    /* Raw noise sanity per source: population count should sit near half.
+     * Source 1 is optional - a build that needs DCC0 elsewhere sets
+     * WOLFSSL_C2000_ENTROPY_NUM_SRC to 1. */
+    for (src = 0; src < WOLFSSL_C2000_ENTROPY_NUM_SRC; src++) {
         ret = wc_c2000_Entropy_GetRaw(raw, (word32)sizeof(raw), src);
+        if (ret != 0) {
+            /* raw[] holds stale data on failure, so counting it would report a
+             * meaningless balance.  Report the read error instead. */
+            printf("Entropy raw src%d bit balance: FAIL (read error %d)\r\n",
+                   src, ret);
+            continue;
+        }
         ones = 0;
         for (i = 0; i < (word32)sizeof(raw); i++) {
             for (b = 0; b < 8; b++) {
@@ -1319,7 +1378,7 @@ static void wolf_entropy_test(void)
         /* 2048 bits; accept 40%..60% ones, i.e. counts 820..1228. */
         printf("Entropy raw src%d bit balance: %s (%lu/2048 ones)\r\n",
                src,
-               (ret == 0 && ones > 819UL && ones < 1229UL) ? "PASS" : "FAIL",
+               (ones > 819UL && ones < 1229UL) ? "PASS" : "FAIL",
                (unsigned long)ones);
     }
 
@@ -1378,6 +1437,17 @@ static void wolf_aes_test(void)
     static byte o[16], o2[16], tag[16];
     int r;
 
+    /* Must be initialised, and explicitly with INVALID_DEVID: a static Aes
+     * zero-fills devId to 0, which is a valid device id, so with WOLF_CRYPTO_CB
+     * built in (HWAES=1) every aes.c hook would attempt callback dispatch
+     * instead of skipping.  This is the software reference for the HW-vs-SW
+     * cross-checks, so it must stay unambiguously software. */
+    r = wc_AesInit(&aes, NULL, INVALID_DEVID);
+    if (r != 0) {
+        printf("AES software test: FAIL (init ret=%d)\r\n", r);
+        return;
+    }
+
     /* CBC */
     r = wc_AesSetKey(&aes, k, 16, iv, AES_ENCRYPTION);
     if (r == 0) r = wc_AesCbcEncrypt(&aes, o, pt, 16);
@@ -1432,11 +1502,17 @@ static void wolf_aes_test(void)
  * NIST SP800-38A vectors are asserted where we have them; multi-block,
  * split-call and in-place cases are checked hardware-against-software, since
  * software AES is already covered by wolfcrypt_test. */
+/* Set only when the AESA device actually registered.  Without it the 'hw'
+ * context silently falls back to software and every cross-check would compare
+ * software against software and report PASS. */
+static int g_aesaReady = 0;
+
 static void hw_report(const char* name, int r, const byte* a, const byte* b,
                       word32 len)
 {
-    printf("HW %s: %s\r\n", name,
-        (r == 0 && XMEMCMP(a, b, len) == 0) ? "PASS" : "FAIL");
+    int cmp = XMEMCMP(a, b, len);
+    printf("HW %s: %s (ret=%d cmp=%d)\r\n", name,
+        (r == 0 && cmp == 0) ? "PASS" : "FAIL", r, cmp);
 }
 
 static void wolf_aes_hw_test(void)
@@ -1494,9 +1570,20 @@ static void wolf_aes_hw_test(void)
     static byte oh[64], os[64], dh[64];
     int rh, rs;
 
-    if (wc_AesInit(&hw, NULL, WOLFSSL_C2000_DEVID) != 0 ||
-        wc_AesInit(&sw, NULL, INVALID_DEVID) != 0) {
-        printf("HW AES init: FAIL\r\n");
+    if (!g_aesaReady) {
+        printf("HW AES cross-checks: SKIP (AESA not registered)\r\n");
+        return;
+    }
+
+    rh = wc_AesInit(&hw, NULL, WOLFSSL_C2000_DEVID);
+    if (rh != 0) {
+        printf("HW AES init (hw ctx): FAIL (ret=%d)\r\n", rh);
+        return;
+    }
+    rs = wc_AesInit(&sw, NULL, INVALID_DEVID);
+    if (rs != 0) {
+        printf("HW AES init (sw ctx): FAIL (ret=%d)\r\n", rs);
+        wc_AesFree(&hw);
         return;
     }
 
@@ -1506,7 +1593,7 @@ static void wolf_aes_hw_test(void)
     if (rh == 0) rh = wc_AesEcbEncrypt(&hw, oh, pt, 64);
     if (rs == 0) rs = wc_AesEcbEncrypt(&sw, os, pt, 64);
     hw_report("AES-128-ECB encrypt vs NIST", rh, oh, ecb_ct1, 16);
-    hw_report("AES-128-ECB encrypt vs SW", (rh | rs), oh, os, 64);
+    hw_report("AES-128-ECB encrypt vs SW", ((rh != 0) ? rh : rs), oh, os, 64);
 
     rh = wc_AesSetKey(&hw, k128, 16, NULL, AES_DECRYPTION);
     if (rh == 0) rh = wc_AesEcbDecrypt(&hw, dh, oh, 64);
@@ -1518,7 +1605,7 @@ static void wolf_aes_hw_test(void)
     if (rh == 0) rh = wc_AesCbcEncrypt(&hw, oh, pt, 64);
     if (rs == 0) rs = wc_AesCbcEncrypt(&sw, os, pt, 64);
     hw_report("AES-128-CBC encrypt vs NIST", rh, oh, cbc_ct1, 16);
-    hw_report("AES-128-CBC encrypt vs SW", (rh | rs), oh, os, 64);
+    hw_report("AES-128-CBC encrypt vs SW", ((rh != 0) ? rh : rs), oh, os, 64);
 
     rh = wc_AesSetKey(&hw, k128, 16, iv, AES_DECRYPTION);
     if (rh == 0) rh = wc_AesCbcDecrypt(&hw, dh, oh, 64);
@@ -1528,7 +1615,7 @@ static void wolf_aes_hw_test(void)
     rh = wc_AesSetKey(&hw, k128, 16, iv, AES_ENCRYPTION);
     if (rh == 0) rh = wc_AesCbcEncrypt(&hw, oh, pt, 16);
     if (rh == 0) rh = wc_AesCbcEncrypt(&hw, oh + 16, pt + 16, 48);
-    hw_report("AES-128-CBC split-call chain", (rh | rs), oh, os, 64);
+    hw_report("AES-128-CBC split-call chain", rh, oh, os, 64);
 
     /* ---- CBC in-place decrypt: proves the last-block save ---- */
     XMEMCPY(dh, os, 64);
@@ -1543,26 +1630,53 @@ static void wolf_aes_hw_test(void)
     if (rs == 0) rs = wc_AesCtrEncrypt(&sw, os, pt, 64);
     hw_report("AES-128-CTR vs NIST (64B)", rh, oh, ctr_ct, 64);
     hw_report("AES-128-CTR SW vs NIST (64B)", rs, os, ctr_ct, 64);
-    hw_report("AES-128-CTR vs SW", (rh | rs), oh, os, 64);
+    hw_report("AES-128-CTR vs SW", ((rh != 0) ? rh : rs), oh, os, 64);
 
     /* ---- CTR split at a non-block boundary: proves aes->left/aes->tmp ---- */
     rh = wc_AesSetKey(&hw, k128, 16, ctr_iv, AES_ENCRYPTION);
     if (rh == 0) rh = wc_AesCtrEncrypt(&hw, oh, pt, 10);
     if (rh == 0) rh = wc_AesCtrEncrypt(&hw, oh + 10, pt + 10, 54);
-    hw_report("AES-128-CTR partial split", (rh | rs), oh, os, 64);
+    hw_report("AES-128-CTR partial split", rh, oh, os, 64);
 
     /* ---- 192- and 256-bit keys: the 6- and 8-word AES_setKey1 paths ---- */
     rh = wc_AesSetKey(&hw, k192, 24, iv, AES_ENCRYPTION);
     rs = wc_AesSetKey(&sw, k192, 24, iv, AES_ENCRYPTION);
     if (rh == 0) rh = wc_AesCbcEncrypt(&hw, oh, pt, 64);
     if (rs == 0) rs = wc_AesCbcEncrypt(&sw, os, pt, 64);
-    hw_report("AES-192-CBC encrypt vs SW", (rh | rs), oh, os, 64);
+    hw_report("AES-192-CBC encrypt vs SW", ((rh != 0) ? rh : rs), oh, os, 64);
 
     rh = wc_AesSetKey(&hw, k256, 32, iv, AES_ENCRYPTION);
     rs = wc_AesSetKey(&sw, k256, 32, iv, AES_ENCRYPTION);
     if (rh == 0) rh = wc_AesCbcEncrypt(&hw, oh, pt, 64);
     if (rs == 0) rs = wc_AesCbcEncrypt(&sw, os, pt, 64);
-    hw_report("AES-256-CBC encrypt vs SW", (rh | rs), oh, os, 64);
+    hw_report("AES-256-CBC encrypt vs SW", ((rh != 0) ? rh : rs), oh, os, 64);
+
+    /* ECB and CTR at 192/256 too: the accelerator's key schedule differs per
+     * key size, and marshalling the longer schedule into its 32-bit registers
+     * is exactly the octet handling this port is validating. */
+    rh = wc_AesSetKey(&hw, k192, 24, NULL, AES_ENCRYPTION);
+    rs = wc_AesSetKey(&sw, k192, 24, NULL, AES_ENCRYPTION);
+    if (rh == 0) rh = wc_AesEcbEncrypt(&hw, oh, pt, 64);
+    if (rs == 0) rs = wc_AesEcbEncrypt(&sw, os, pt, 64);
+    hw_report("AES-192-ECB encrypt vs SW", ((rh != 0) ? rh : rs), oh, os, 64);
+
+    rh = wc_AesSetKey(&hw, k256, 32, NULL, AES_ENCRYPTION);
+    rs = wc_AesSetKey(&sw, k256, 32, NULL, AES_ENCRYPTION);
+    if (rh == 0) rh = wc_AesEcbEncrypt(&hw, oh, pt, 64);
+    if (rs == 0) rs = wc_AesEcbEncrypt(&sw, os, pt, 64);
+    hw_report("AES-256-ECB encrypt vs SW", ((rh != 0) ? rh : rs), oh, os, 64);
+
+    rh = wc_AesSetKey(&hw, k192, 24, ctr_iv, AES_ENCRYPTION);
+    rs = wc_AesSetKey(&sw, k192, 24, ctr_iv, AES_ENCRYPTION);
+    if (rh == 0) rh = wc_AesCtrEncrypt(&hw, oh, pt, 64);
+    if (rs == 0) rs = wc_AesCtrEncrypt(&sw, os, pt, 64);
+    hw_report("AES-192-CTR encrypt vs SW", ((rh != 0) ? rh : rs), oh, os, 64);
+
+    rh = wc_AesSetKey(&hw, k256, 32, ctr_iv, AES_ENCRYPTION);
+    rs = wc_AesSetKey(&sw, k256, 32, ctr_iv, AES_ENCRYPTION);
+    if (rh == 0) rh = wc_AesCtrEncrypt(&hw, oh, pt, 64);
+    if (rs == 0) rs = wc_AesCtrEncrypt(&sw, os, pt, 64);
+    hw_report("AES-256-CTR encrypt vs SW", ((rh != 0) ? rh : rs), oh, os, 64);
 
     wc_AesFree(&hw);
     wc_AesFree(&sw);
@@ -1964,12 +2078,13 @@ static void wolf_aes_modes_test(void)
 #ifdef WOLFSSL_AES_OFB
     {
         static Aes oaes;
-        r = wc_AesSetKey(&oaes, mk, 16, miv, AES_ENCRYPTION);
+        r = wc_AesInit(&oaes, NULL, INVALID_DEVID);
+        if (r == 0) r = wc_AesSetKey(&oaes, mk, 16, miv, AES_ENCRYPTION);
         if (r == 0) r = wc_AesOfbEncrypt(&oaes, mct, mpt, 32);
         if (r == 0) r = wc_AesSetKey(&oaes, mk, 16, miv, AES_ENCRYPTION);
         if (r == 0) r = wc_AesOfbDecrypt(&oaes, mdec, mct, 32);
-        printf("AES-128-OFB round-trip: %s\r\n",
-            (r == 0 && XMEMCMP(mdec, mpt, 32) == 0) ? "PASS":"FAIL");
+        printf("AES-128-OFB round-trip: %s (ret=%d)\r\n",
+            (r == 0 && XMEMCMP(mdec, mpt, 32) == 0) ? "PASS":"FAIL", r);
         wc_AesFree(&oaes);
     }
 #endif
@@ -2147,12 +2262,12 @@ int main(void)
     printf("=== wolfSSL wolfCrypt on TI C2000 LAUNCHXL-F28P55X ===\r\n");
 
 #ifdef WOLF_ENTROPY_PROBE
-    /* Measurement-only image: dump raw entropy samples and stop. */
-    {
-        extern void entropy_probe_run(void);
-        entropy_probe_run();
-    }
-    while (1) {
+    /* Measurement-only image: dump raw entropy samples and stop.  Nothing
+     * after this runs, which is why the Makefile rejects combining
+     * ENTROPY_PROBE=1 with the other image toggles. */
+    entropy_probe_run();
+    for (;;) {
+        /* spin */
     }
 #endif
 
@@ -2173,6 +2288,7 @@ int main(void)
     }
     else {
         printf("C2000 AESA init: PASS\r\n");
+        g_aesaReady = 1;
     }
 #endif
 
