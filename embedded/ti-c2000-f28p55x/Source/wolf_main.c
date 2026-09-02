@@ -110,6 +110,9 @@
  * ML-DSA-87 vectors from wolfcrypt/test/test.c stay in the default image. */
 #include <wolfssl/wolfcrypt/hash.h>
 #include "mldsa_octet_kat.h"
+#ifdef WOLFSSL_MLDSA_VERIFY_PRECOMP_A
+#include "mldsa87_precomp_a.h"
+#endif
 #else
 #include "mldsa87_kat.h"
 #endif
@@ -1283,6 +1286,14 @@ static void sb_verify(const char* what, long flip, int want)
         ret = wc_MlDsaKey_ImportPubRaw(&sb_key, sb_mldsa87_pub,
             (word32)sizeof(sb_mldsa87_pub));
     }
+#ifdef WOLFSSL_MLDSA_VERIFY_PRECOMP_A
+    if (ret == 0) {
+        /* A was expanded at build time and lives in flash: verify skips the
+         * SHAKE128 rejection sampling entirely. */
+        ret = wc_MlDsaKey_SetPrecompA(&sb_key, sb_mldsa87_A, SB_A_LEN,
+            sb_rho, (word32)sizeof(sb_rho));
+    }
+#endif
     if (ret == 0) {
         ret = wc_MlDsaKey_VerifyMu(&sb_key, sb_mldsa87_sig,
             (word32)sizeof(sb_mldsa87_sig), mu, MLDSA_MU_SZ, &res);
@@ -1297,8 +1308,64 @@ static void wolf_secureboot_test(void)
     printf("secure boot: %lu-octet packed image, %u-octet chunks, "
            "image never resident\r\n",
            (unsigned long)SB_IMG_SZ, (unsigned)SB_CHUNK);
+#ifdef WOLFSSL_MLDSA_VERIFY_PRECOMP_A
+    printf("matrix A: precomputed in flash (%ld coefficients)\r\n",
+           (long)SB_A_LEN);
+#else
+    printf("matrix A: expanded at run time (SHAKE128 rejection sampling)\r\n");
+#endif
     sb_verify("ML-DSA-87 pure-mode packed-image verify:", -1, 1);
     sb_verify("ML-DSA-87 corrupted-image reject:", SB_IMG_SZ / 2, 0);
+
+#ifdef WOLF_MLDSA_VERIFY_BENCH
+    /* Time the ML-DSA verify alone (mu is already built), which is the figure
+     * a bootloader budget cares about. */
+    {
+        byte mu[MLDSA_MU_SZ];
+        int res = 0;
+        int bret;
+        int bi;
+        double t;
+
+        /* Time mu construction too: for a real firmware image the streamed
+         * SHAKE-256 hashing, not the ML-DSA verify, sets the boot budget. */
+        (void)current_time(1);
+        bret = sb_build_mu(mu, -1);
+        t = current_time(0);
+        if (bret == 0) {
+            printf("mu build (%lu octets streamed): %.2f ms = %.1f KiB/s\r\n",
+                   (unsigned long)SB_IMG_SZ, t * 1000.0,
+                   ((double)SB_IMG_SZ / 1024.0) / t);
+        }
+        if (bret == 0) {
+            bret = wc_MlDsaKey_Init(&sb_key, NULL, INVALID_DEVID);
+        }
+        if (bret == 0) {
+            bret = wc_MlDsaKey_SetParams(&sb_key, WC_ML_DSA_87);
+        }
+        if (bret == 0) {
+            bret = wc_MlDsaKey_ImportPubRaw(&sb_key, sb_mldsa87_pub,
+                (word32)sizeof(sb_mldsa87_pub));
+        }
+#ifdef WOLFSSL_MLDSA_VERIFY_PRECOMP_A
+        if (bret == 0) {
+            bret = wc_MlDsaKey_SetPrecompA(&sb_key, sb_mldsa87_A, SB_A_LEN,
+                sb_rho, (word32)sizeof(sb_rho));
+        }
+#endif
+        if (bret == 0) {
+            (void)current_time(1);
+            for (bi = 0; bi < 10; bi++) {
+                (void)wc_MlDsaKey_VerifyMu(&sb_key, sb_mldsa87_sig,
+                    (word32)sizeof(sb_mldsa87_sig), mu, MLDSA_MU_SZ, &res);
+            }
+            t = current_time(0);
+            printf("ML-DSA-87 VerifyMu bench: 10 ops in %.3f s = %.2f ms/op\r\n",
+                   t, (t * 1000.0) / 10.0);
+        }
+        wc_MlDsaKey_Free(&sb_key);
+    }
+#endif
 }
 #endif /* WOLF_SECUREBOOT */
 

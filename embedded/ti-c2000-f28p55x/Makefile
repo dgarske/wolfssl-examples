@@ -130,6 +130,13 @@ ifeq ($(SECUREBOOT),1)
   CFLAGS += --define=WOLF_SECUREBOOT --define=WOLF_MLDSA_ALL_LEVELS
 endif
 
+# PRECOMPA=1 stores matrix A (expanded at build time from the fixed
+# verification key) in flash, so verify skips the SHAKE128 rejection sampling.
+PRECOMPA ?= 0
+ifeq ($(PRECOMPA),1)
+  CFLAGS += --define=WOLFSSL_MLDSA_VERIFY_PRECOMP_A
+endif
+
 MLDSA ?= 0
 ifeq ($(MLDSA),1)
   CFLAGS  += --define=WOLF_MLDSA_ALL_LEVELS
