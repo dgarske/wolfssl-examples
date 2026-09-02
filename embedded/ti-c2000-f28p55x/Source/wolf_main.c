@@ -103,7 +103,7 @@
 #endif
 #include <wolfcrypt/test/test.h>
 #include <wolfcrypt/benchmark/benchmark.h>
-#ifdef WOLF_MLDSA_OCTETS
+#if defined(WOLF_MLDSA_OCTETS) || defined(WOLF_SECUREBOOT)
 /* The octet-boundary image carries its own seed-derived vectors for all three
  * parameter sets (it needs the matching private key to produce the pre-hash
  * signatures), and reuses the same kat_mldsa87_* names.  The canonical FIPS 204
@@ -1187,6 +1187,120 @@ static void wolf_mldsa_octet_test(void)
     mo_packed_verify();
 }
 #endif /* WOLF_MLDSA_OCTETS */
+
+#ifdef WOLF_SECUREBOOT
+/* ------------------------------------------------------------------------- */
+/* Pure-mode ML-DSA secure boot (make SECUREBOOT=1)                          */
+/* ------------------------------------------------------------------------- */
+/* Verifies a firmware image that is stored PACKED in flash - two octets per
+ * 16-bit cell, the layout a host signing tool and the C28x programmer produce -
+ * without ever holding the image in RAM.
+ *
+ * ML-DSA has no streaming interface, but the message reaches the algorithm only
+ * through mu = SHAKE256(tr || 0x00 || ctxLen || ctx || M), and a hash streams.
+ * wc_MlDsaKey_VerifyMu() takes mu directly (ExternalMu-ML-DSA), so the image is
+ * read a chunk at a time, expanded with wc_UnpackOctets(), and absorbed.
+ * RAM cost is the chunk buffer plus 128 octets, whatever the image size. */
+
+#define SB_CHUNK 256            /* octets per flash read */
+
+static wc_MlDsaKey sb_key;      /* .bss: too big for the 16 KW C28x stack */
+
+/* Build mu over the packed image.  flip < 0 leaves the image intact; otherwise
+ * one octet is corrupted, to prove a bad image is rejected. */
+static int sb_build_mu(byte* mu, long flip)
+{
+    wc_Shake sh;
+    byte tr[MLDSA_TR_SZ];
+    byte buf[SB_CHUNK];
+    byte prefix[2];
+    word32 off;
+    int ret;
+
+    /* tr = SHAKE256(raw public key).  Constant for a fixed verification key,
+     * so a production bootloader would precompute this at build time. */
+    ret = wc_InitShake256(&sh, NULL, INVALID_DEVID);
+    if (ret == 0) {
+        ret = wc_Shake256_Update(&sh, sb_mldsa87_pub,
+            (word32)sizeof(sb_mldsa87_pub));
+    }
+    if (ret == 0) {
+        ret = wc_Shake256_Final(&sh, tr, (word32)sizeof(tr));
+    }
+    wc_Shake256_Free(&sh);
+    if (ret != 0) {
+        return ret;
+    }
+
+    /* mu = SHAKE256(tr || 0x00 || ctxLen || ctx || image).  0x00 selects pure
+     * (non pre-hash) mode; the context here is empty. */
+    prefix[0] = 0x00;
+    prefix[1] = 0x00;
+    ret = wc_InitShake256(&sh, NULL, INVALID_DEVID);
+    if (ret == 0) {
+        ret = wc_Shake256_Update(&sh, tr, (word32)sizeof(tr));
+    }
+    if (ret == 0) {
+        ret = wc_Shake256_Update(&sh, prefix, 2);
+    }
+    for (off = 0; (ret == 0) && (off < SB_IMG_SZ); off += SB_CHUNK) {
+        word32 n = SB_IMG_SZ - off;
+        if (n > SB_CHUNK) {
+            n = SB_CHUNK;
+        }
+        ret = wc_UnpackOctets(buf, (word32)sizeof(buf),
+            (const byte*)sb_image_packed + (off / WC_OCTETS_PER_BYTE),
+            WC_PACKED_CELLS(n), n);
+        if ((ret == 0) && (flip >= 0) &&
+            ((word32)flip >= off) && ((word32)flip < off + n)) {
+            buf[(word32)flip - off] ^= 0x01;
+        }
+        if (ret == 0) {
+            ret = wc_Shake256_Update(&sh, buf, n);
+        }
+    }
+    if (ret == 0) {
+        ret = wc_Shake256_Final(&sh, mu, MLDSA_MU_SZ);
+    }
+    wc_Shake256_Free(&sh);
+    return ret;
+}
+
+static void sb_verify(const char* what, long flip, int want)
+{
+    byte mu[MLDSA_MU_SZ];
+    int res = -1;
+    int ret;
+
+    ret = sb_build_mu(mu, flip);
+    if (ret == 0) {
+        ret = wc_MlDsaKey_Init(&sb_key, NULL, INVALID_DEVID);
+    }
+    if (ret == 0) {
+        ret = wc_MlDsaKey_SetParams(&sb_key, WC_ML_DSA_87);
+    }
+    if (ret == 0) {
+        ret = wc_MlDsaKey_ImportPubRaw(&sb_key, sb_mldsa87_pub,
+            (word32)sizeof(sb_mldsa87_pub));
+    }
+    if (ret == 0) {
+        ret = wc_MlDsaKey_VerifyMu(&sb_key, sb_mldsa87_sig,
+            (word32)sizeof(sb_mldsa87_sig), mu, MLDSA_MU_SZ, &res);
+    }
+    printf("%s %s (ret=%d res=%d)\r\n", what,
+           ((ret == 0) && (res == want)) ? "PASS" : "FAIL", ret, res);
+    wc_MlDsaKey_Free(&sb_key);
+}
+
+static void wolf_secureboot_test(void)
+{
+    printf("secure boot: %lu-octet packed image, %u-octet chunks, "
+           "image never resident\r\n",
+           (unsigned long)SB_IMG_SZ, (unsigned)SB_CHUNK);
+    sb_verify("ML-DSA-87 pure-mode packed-image verify:", -1, 1);
+    sb_verify("ML-DSA-87 corrupted-image reject:", SB_IMG_SZ / 2, 0);
+}
+#endif /* WOLF_SECUREBOOT */
 
 #ifdef WOLF_MLDSA_SIGN
 /* ML-DSA-87 sign+verify round-trip (keygen -> sign -> verify).  Exercises
@@ -2303,7 +2417,10 @@ int main(void)
     wolf_sha1_test();
 #endif
 
-#if defined(WOLF_MLDSA_OCTETS)
+#ifdef WOLF_SECUREBOOT
+    printf("\r\n--- Pure-mode ML-DSA secure boot ---\r\n");
+    wolf_secureboot_test();
+#elif defined(WOLF_MLDSA_OCTETS)
     printf("\r\n--- ML-DSA octet boundary (44/65/87, pre-hash, packed) ---\r\n");
     wolf_mldsa_octet_test();
 #elif !defined(WOLF_MLDSA_SIGN)

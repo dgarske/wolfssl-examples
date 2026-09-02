@@ -36,6 +36,11 @@
 #define MSG_SZ   512
 #define OUT_NAME "mldsa_octet_kat.h"
 
+/* A stand-in firmware image for the secure-boot demo.  Deliberately larger
+ * than anything a bootloader would buffer, to show the image is never
+ * resident: it is stored PACKED in flash and streamed through SHAKE-256. */
+#define IMG_SZ   8192
+
 static const byte kSeed[MLDSA_SEED_SZ] = {
     0x00,0x01,0x02,0x03,0x04,0x05,0x06,0x07,
     0x08,0x09,0x0a,0x0b,0x0c,0x0d,0x0e,0x0f,
@@ -155,6 +160,43 @@ static int do_level(int type, const char* tag, const byte* msg,
     return ret;
 }
 
+/* Secure-boot vectors: an ML-DSA-87 key, a packed "firmware image", and a
+ * PURE (non pre-hash) signature over that image. */
+static int do_secureboot(byte* img)
+{
+    wc_MlDsaKey key;
+    byte  pub[MLDSA_MAX_PUB_KEY_SIZE];
+    byte  sig[MLDSA_MAX_SIG_SIZE];
+    word32 pubLen = (word32)sizeof(pub);
+    word32 sigLen = (word32)sizeof(sig);
+    int   ret;
+
+    ret = wc_MlDsaKey_Init(&key, NULL, INVALID_DEVID);
+    if (ret == 0)
+        ret = wc_MlDsaKey_SetParams(&key, WC_ML_DSA_87);
+    if (ret == 0)
+        ret = wc_MlDsaKey_MakeKeyFromSeed(&key, kSeed);
+    if (ret == 0)
+        ret = wc_MlDsaKey_ExportPubRaw(&key, pub, &pubLen);
+    if (ret == 0) {
+        /* Pure mode: sign the image itself, no pre-hash, empty context. */
+        ret = wc_MlDsaKey_SignCtxWithSeed(&key, NULL, 0, sig, &sigLen,
+            img, IMG_SZ, kRnd);
+    }
+    if (ret == 0) {
+        fprintf(out, "\n#define SB_IMG_SZ %u\n\n", (unsigned)IMG_SZ);
+        emit_bytes("sb_mldsa87_pub", pub, pubLen);
+        emit_packed("sb_image_packed", img, IMG_SZ);
+        emit_bytes("sb_mldsa87_sig", sig, sigLen);
+    }
+    else {
+        fprintf(stderr, "secure-boot vector generation failed: %d\n", ret);
+    }
+
+    wc_MlDsaKey_Free(&key);
+    return ret;
+}
+
 int main(void)
 {
     byte msg[MSG_SZ];
@@ -200,7 +242,16 @@ int main(void)
         "#define MLDSA_OCTET_KAT_H\n\n"
         "#define KAT_MLDSA_CTX  \"%s\"\n\n", kCtx);
 
-    ret = do_level(WC_ML_DSA_44, "44", msg, sha256, sha512, 0, 0);
+    {   /* deterministic stand-in image */
+        static byte img[IMG_SZ];
+        int j;
+        for (j = 0; j < IMG_SZ; j++) {
+            img[j] = (byte)(((j * 31) ^ (j >> 5)) & 0xFF);
+        }
+        ret = do_secureboot(img);
+    }
+    if (ret == 0)
+        ret = do_level(WC_ML_DSA_44, "44", msg, sha256, sha512, 0, 0);
     if (ret == 0)
         ret = do_level(WC_ML_DSA_65, "65", msg, sha256, sha512, 1, 0);
     if (ret == 0)

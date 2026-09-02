@@ -122,6 +122,14 @@ ifeq ($(FASTVERIFY),1)
   CFLAGS += --define=WOLF_MLDSA_FAST_VERIFY
 endif
 
+# SECUREBOOT=1 verifies a PACKED firmware image straight from flash in pure
+# (non pre-hash) ML-DSA mode, streaming it through SHAKE-256 so the image is
+# never resident.  Standalone image, like MLDSA=1.
+SECUREBOOT ?= 0
+ifeq ($(SECUREBOOT),1)
+  CFLAGS += --define=WOLF_SECUREBOOT --define=WOLF_MLDSA_ALL_LEVELS
+endif
+
 MLDSA ?= 0
 ifeq ($(MLDSA),1)
   CFLAGS  += --define=WOLF_MLDSA_ALL_LEVELS
@@ -278,6 +286,10 @@ ifeq ($(SIGN),1)
   CFLAGS  += --define=WOLF_MLDSA_SIGN --define=NO_CRYPT_TEST \
              --define=NO_CRYPT_BENCHMARK
   LNKCMD  := $(CURDIR)/28p55x_wolf_sign_lnk.cmd
+  HARNESS_SRCS :=
+else ifeq ($(SECUREBOOT),1)
+  CFLAGS  += --define=NO_CRYPT_TEST --define=NO_CRYPT_BENCHMARK
+  LNKCMD  := $(CURDIR)/28p55x_wolf_flash_lnk.cmd
   HARNESS_SRCS :=
 else ifeq ($(MLDSA),1)
 ifeq ($(BENCH),1)
