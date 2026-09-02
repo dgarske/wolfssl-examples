@@ -115,6 +115,13 @@ endif
 # wc_MlDsaKey_VerifyCtxHash() over SHA-256/SHA-512, and a verify from a PACKED
 # key and signature via wc_UnpackOctets().  All three parameter sets are
 # compiled in, so the test/benchmark harness is dropped to make room.
+# FASTVERIFY=1 trades RAM for ML-DSA verify speed: keeps the full z vector
+# (drops WOLFSSL_MLDSA_VERIFY_SMALLEST_MEM) and enables the 64-bit accumulator.
+FASTVERIFY ?= 0
+ifeq ($(FASTVERIFY),1)
+  CFLAGS += --define=WOLF_MLDSA_FAST_VERIFY
+endif
+
 MLDSA ?= 0
 ifeq ($(MLDSA),1)
   CFLAGS  += --define=WOLF_MLDSA_ALL_LEVELS

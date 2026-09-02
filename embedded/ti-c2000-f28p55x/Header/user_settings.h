@@ -204,7 +204,17 @@ extern "C" {
  * time instead of pinning the whole l-vector (saves ~6 KB on ML-DSA-87).
  * Measured on F28P55x: sizeof(wc_MlDsaKey) 20,048 -> 13,904 bytes. */
 #undef  WOLFSSL_MLDSA_VERIFY_SMALLEST_MEM
+#ifndef WOLF_MLDSA_FAST_VERIFY
+/* Smallest RAM: streams the signature's z vector one polynomial at a time, so
+ * each z is re-decoded and re-NTT'd k times instead of once.  FASTVERIFY=1
+ * trades that RAM back for speed. */
 #define WOLFSSL_MLDSA_VERIFY_SMALLEST_MEM
+#else
+/* Keep the whole z vector (+~6 KB RAM) and accumulate A.z in a 64-bit poly so
+ * one Montgomery reduction is done per coefficient instead of per (k,l) pair. */
+#undef  WOLFSSL_MLDSA_SMALL_MEM_POLY64
+#define WOLFSSL_MLDSA_SMALL_MEM_POLY64
+#endif
 /* Optional on this part: also define WOLFSSL_MLDSA_ASSIGN_KEY to keep the
  * public key in flash (by reference) instead of copying it into the key
  * struct - that removes a further ~5 KB of RAM (the 2,592-octet public key is
