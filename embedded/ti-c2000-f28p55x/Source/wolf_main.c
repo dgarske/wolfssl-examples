@@ -884,14 +884,17 @@ static void wolf_sha1_test(void)
 }
 #endif /* WOLF_SHA1 */
 
-#if !defined(WOLF_MLDSA_SIGN) && !defined(WOLF_MLDSA_OCTETS)
+#if !defined(WOLF_MLDSA_SIGN) && !defined(WOLF_MLDSA_OCTETS) && \
+    !defined(WOLF_SECUREBOOT)
 /* ML-DSA-87 verify known-answer test (real pk/msg/sig from test.c).  This
  * is the primary deliverable: a deterministic, RNG-free verify on HW.
  * Key struct is static (large; WOLFSSL_MLDSA_VERIFY_NO_MALLOC pins buffers
  * into it). msg matches test.c's mldsa_param_vfy_test: msg[i] = (byte)i.
  * Skipped in the SIGN build: its static verify key would not fit alongside
  * the sign key + 32 KW heap, and the sign round-trip below also exercises
- * verify (of a freshly produced signature). */
+ * verify (of a freshly produced signature).  Skipped in the SECUREBOOT build
+ * too: that image calls wolf_secureboot_test() instead, so the guard here has
+ * to match the call site or this is compiled and never used. */
 static void wolf_mldsa87_verify_test(void)
 {
     /* mldsa_key is static (.bss): WOLFSSL_MLDSA_VERIFY_NO_MALLOC pins the
